@@ -24,4 +24,4 @@ jobs:
           playwright install --with-deps
 
       - name: Run file1
-        run: python scripts/jobs_all.py
+        run: python jobs_all.py

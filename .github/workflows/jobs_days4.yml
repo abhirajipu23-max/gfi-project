@@ -20,4 +20,4 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps
 
-      - run: python scripts/jobs_days4.py
+      - run: python jobs_days4.py
