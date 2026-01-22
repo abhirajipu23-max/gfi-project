@@ -20,4 +20,4 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps
 
-      - run: python "level3&4/keka_git.py"
+      - run: python "level4/keka_git.py"
