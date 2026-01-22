@@ -20,4 +20,4 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps
 
-      - run: python "level1&2/level3.py"
+      - run: python "level1&2/level1&2.py"
