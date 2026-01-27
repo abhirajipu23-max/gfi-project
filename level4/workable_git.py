@@ -6,16 +6,13 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin
 
-# Playwright
 from playwright.sync_api import sync_playwright
 from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 
-# Database
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# ================= CONFIGURATION =================
 load_dotenv()
 
 SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
@@ -30,17 +27,14 @@ USER_AGENT = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-MAX_STAGE1_WORKERS = 1   # Stage1 uses 1 page for stability
+MAX_STAGE1_WORKERS = 1
 STAGE2_CONCURRENCY = 10
 
 OUTPUT_JOBS_FILE = "workable_jobs.csv"
 OUTPUT_SCRAPES_FILE = "workable_scrapes.csv"
 
 
-# ================= HELPERS =================
 class ScraperUtils:
-    """Static helper methods for text processing and DOM safety."""
-
     @staticmethod
     def clean_text(text: str) -> str:
         if not text:
@@ -65,7 +59,6 @@ class ScraperUtils:
 
     @staticmethod
     def normalize_job_type(text: str):
-        """Normalize Workable job type."""
         if not text or text == "NA":
             return None
 
@@ -86,7 +79,6 @@ class ScraperUtils:
 
     @staticmethod
     def normalize_workable_posted_date(text: str):
-        
         if not text or text == "NA":
             return None
 
@@ -131,10 +123,7 @@ class ScraperUtils:
         return None
 
 
-# ================= DATABASE MANAGER =================
 class SupabaseManager:
-    """Handles all interactions with Supabase."""
-
     def __init__(self, url=SUPABASE_URL, key=SUPABASE_KEY):
         self.client: Client = create_client(url, key)
 
@@ -150,7 +139,6 @@ class SupabaseManager:
             return pd.DataFrame()
 
     def fetch_pending_jobs(self, ats_filter="Workable"):
-        """Fetch jobs needing enrichment."""
         try:
             print("Fetching pending Workable jobs...")
             res = (
@@ -181,9 +169,9 @@ class SupabaseManager:
         try:
             print(f"Uploading {len(scrapes_data)} scrape records...")
             self.client.table(SCRAPES_TABLE).upsert(scrapes_data).execute()
-            print("✅ Scrape records uploaded.")
+            print("Scrape records uploaded.")
         except Exception as e:
-            print(f"❌ Error uploading scrapes: {e}")
+            print(f"Error uploading scrapes: {e}")
 
     def save_jobs_deduplicated(self, jobs_data):
         if not jobs_data:
@@ -205,18 +193,18 @@ class SupabaseManager:
                 for row in res.data:
                     existing_urls.add(row["job_url"])
             except Exception as e:
-                print(f"   ⚠️ Duplicate check error: {e}")
+                print(f"Duplicate check error: {e}")
 
         new_jobs = [j for j in unique_jobs_list if j["job_url"] not in existing_urls]
-        print(f"   -> Inserting {len(new_jobs)} new jobs ({len(unique_jobs_list) - len(new_jobs)} skipped).")
+        print(f"Inserting {len(new_jobs)} new jobs ({len(unique_jobs_list) - len(new_jobs)} skipped).")
 
         for i in range(0, len(new_jobs), batch_size):
             batch = new_jobs[i : i + batch_size]
             try:
                 self.client.table(JOBS_TABLE).insert(batch).execute()
-                print(f"   ↳ Uploaded batch {i}-{i+len(batch)}")
+                print(f"Uploaded batch {i}-{i+len(batch)}")
             except Exception as e:
-                print(f"   ❌ Error inserting batch: {e}")
+                print(f"Error inserting batch: {e}")
 
     def update_job(self, job_id, payload):
         try:
@@ -224,27 +212,23 @@ class SupabaseManager:
             if clean_payload:
                 clean_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
                 self.client.table(JOBS_TABLE).update(clean_payload).eq("id", job_id).execute()
-                print(f"   ✅ [ID {job_id}] Updated")
+                print(f"Updated ID {job_id}")
         except Exception as e:
-            print(f"   ❌ [ID {job_id}] Update Failed: {e}")
+            print(f"Update Failed ID {job_id}: {e}")
 
 
-# ================= STAGE 1: DISCOVERY =================
 class WorkableDiscovery:
-    """Scrapes Workable job list pages."""
-
     def __init__(self, db_manager: SupabaseManager):
         self.db = db_manager
 
     def scrape_site(self, page, url, scrape_uuid):
         jobs_collected = []
-        print(f"   Scanning: {url}")
+        print(f"Scanning: {url}")
 
         try:
             page.goto(url, timeout=60000, wait_until="networkidle")
             page.wait_for_timeout(2500)
 
-            # cookie accept
             try:
                 btn = page.locator('xpath=//button[contains(text(),"Accept") or contains(text(),"Agree")]')
                 if btn.count() > 0:
@@ -253,15 +237,13 @@ class WorkableDiscovery:
             except:
                 pass
 
-            # load jobs
             jobs = page.locator('xpath=//li[@data-ui="job"]')
             page.wait_for_timeout(1500)
 
             if jobs.count() == 0:
-                print("     ⚠️ No jobs found")
+                print("No jobs found")
                 return []
 
-            # show more loop
             while True:
                 more = page.locator('xpath=//button[@data-ui="load-more-button"]')
                 if more.count() == 0:
@@ -274,7 +256,7 @@ class WorkableDiscovery:
                     break
 
             jobs = page.locator('xpath=//li[@data-ui="job"]')
-            print(f"     ↳ Found {jobs.count()} jobs")
+            print(f"Found {jobs.count()} jobs")
 
             for i in range(jobs.count()):
                 job = jobs.nth(i)
@@ -299,7 +281,6 @@ class WorkableDiscovery:
                 now_iso = datetime.now(timezone.utc).isoformat()
 
                 jobs_collected.append({
-                    "id": uuid.uuid4().int % (2**63 - 1),
                     "created_at": now_iso,
                     "updated_at": now_iso,
                     "scrape_id": scrape_uuid,
@@ -314,7 +295,7 @@ class WorkableDiscovery:
                 })
 
         except Exception as e:
-            print(f"     ❌ Error during scraping: {e}")
+            print(f"Error during scraping: {e}")
             return []
 
         return jobs_collected
@@ -365,7 +346,7 @@ class WorkableDiscovery:
                         all_jobs.extend(jobs)
 
                 except Exception as e:
-                    print(f"   ❌ Failed: {e}")
+                    print(f"Failed: {e}")
                     scrape_record["status"] = "failed"
                     scrape_record["finished_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -373,14 +354,13 @@ class WorkableDiscovery:
 
             browser.close()
 
-        # backup stage1 snapshots
         if all_scrapes:
             pd.DataFrame(all_scrapes).to_csv(OUTPUT_SCRAPES_FILE, index=False)
-            print(f"✅ Stage-1 scrapes snapshot saved: {OUTPUT_SCRAPES_FILE}")
+            print(f"Stage-1 scrapes snapshot saved: {OUTPUT_SCRAPES_FILE}")
 
         if all_jobs:
             pd.DataFrame(all_jobs).to_csv("workable_jobs_stage1.csv", index=False)
-            print("✅ Stage-1 jobs snapshot saved: workable_jobs_stage1.csv")
+            print("Stage-1 jobs snapshot saved: workable_jobs_stage1.csv")
 
         clean_jobs = [j for j in all_jobs if j.get("job_url") and j["job_url"] != "NA"]
         self.db.save_scrapes(all_scrapes)
@@ -389,22 +369,12 @@ class WorkableDiscovery:
         print(f"Stage 1 Runtime: {time.time() - start_time:.2f}s")
 
 
-# ================= STAGE 2: ENRICHMENT =================
 class WorkableEnrichment:
-    """Enrich Workable job details."""
-
     def __init__(self, db_manager: SupabaseManager, concurrency=10):
         self.db = db_manager
         self.concurrency = concurrency
 
     def _extract_details_from_html(self, html: str):
-        """
-        Supports your provided Workable template:
-        - div[data-ui="job-location"]
-        - section[data-ui="job-description"]
-        - section[data-ui="job-requirements"]
-        - section[data-ui="job-benefits"]
-        """
         data = {
             "original_description": None,
             "location": None,
@@ -414,22 +384,18 @@ class WorkableEnrichment:
 
         soup = BeautifulSoup(html, "html.parser")
 
-        # Location
         loc_block = soup.select_one('div[data-ui="job-location"]')
         if loc_block:
             data["location"] = ScraperUtils.clean_text(loc_block.get_text(" ", strip=True))
 
-        # Job type
         type_tag = soup.find(attrs={"data-ui": "job-type"})
         if type_tag:
             data["job_type"] = ScraperUtils.normalize_job_type(type_tag.get_text(strip=True))
 
-        # Department
         dept_tag = soup.find(attrs={"data-ui": "job-department"})
         if dept_tag:
             data["department"] = ScraperUtils.clean_text(dept_tag.get_text(strip=True))
 
-        # Description + Requirements + Benefits (combine)
         parts = []
 
         desc_section = soup.find("section", {"data-ui": "job-description"})
@@ -444,13 +410,11 @@ class WorkableEnrichment:
         if ben_section:
             parts.append(ben_section.get_text(separator="\n", strip=True))
 
-        full_desc = "\n\n".join([p for p in parts if p])
-        full_desc = full_desc.strip()
+        full_desc = "\n\n".join([p for p in parts if p]).strip()
 
         if full_desc:
             data["original_description"] = full_desc
 
-        # meta fallback
         if not data["location"]:
             meta_loc = soup.find("meta", property="og:locality")
             if meta_loc and meta_loc.get("content"):
@@ -489,10 +453,10 @@ class WorkableEnrichment:
                 if payload.get("original_description"):
                     await asyncio.to_thread(self.db.update_job, job_id, payload)
                 else:
-                    print(f"   ⚠️ [ID {job_id}] No description found.")
+                    print(f"No description found ID {job_id}")
 
             except Exception as e:
-                print(f"   ❌ [ID {job_id}] Failed: {str(e)[:120]}")
+                print(f"Failed ID {job_id}: {str(e)[:120]}")
             finally:
                 await page.close()
 
@@ -523,7 +487,6 @@ class WorkableEnrichment:
         asyncio.run(self.run_async())
 
 
-# ================= FINAL EXPORT (STAGE1 + STAGE2 COMBINED) =================
 def export_workable_jobs_backup_from_db(db: SupabaseManager):
     print("\nExporting FINAL Workable jobs backup (Stage 1 + Stage 2 combined) to CSV...")
 
@@ -534,7 +497,7 @@ def export_workable_jobs_backup_from_db(db: SupabaseManager):
             .execute()
         )
     except Exception as e:
-        print(f"❌ Error exporting jobs: {e}")
+        print(f"Error exporting jobs: {e}")
         return
 
     if not res.data:
@@ -543,38 +506,31 @@ def export_workable_jobs_backup_from_db(db: SupabaseManager):
 
     df = pd.DataFrame(res.data)
 
-    # Flatten ats_name
     if "scrapes_duplicate" in df.columns:
         df["ats_name"] = df["scrapes_duplicate"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
-    # Filter Workable only
     df = df[df["ats_name"].astype(str).str.lower().str.contains("workable", na=False)].copy()
 
-    # Drop nested json
     if "scrapes_duplicate" in df.columns:
         df.drop(columns=["scrapes_duplicate"], inplace=True)
 
     df.to_csv(OUTPUT_JOBS_FILE, index=False)
-    print(f"✅ Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")
+    print(f"Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")
 
 
-# ================= MAIN EXECUTION =================
 if __name__ == "__main__":
     start = time.time()
 
     db_manager = SupabaseManager()
 
-    # Stage 1
     discovery = WorkableDiscovery(db_manager)
     discovery.run()
 
-    # Stage 2
     enrichment = WorkableEnrichment(db_manager, concurrency=STAGE2_CONCURRENCY)
     enrichment.run()
 
-    # ✅ Final CSV (Stage-1 + Stage-2 combined)
     export_workable_jobs_backup_from_db(db_manager)
 
     print(f"\nTotal Runtime: {time.time() - start:.2f}s")

@@ -6,37 +6,29 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
-# Playwright imports
 from playwright.sync_api import sync_playwright
 from playwright.async_api import async_playwright
 
-# Database
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# ================= CONFIGURATION =================
 load_dotenv()
 
 SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
 SUPABASE_KEY = "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa"
 
-# Initialize Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Output Files (FINAL combined backup)
 OUTPUT_JOBS_FILE = "darwinbox_jobs.csv"
 OUTPUT_SCRAPES_FILE = "darwinbox_scrapes.csv"
 
-# Settings
 BATCH_SIZE = 100
 MAX_CONCURRENT_PAGES = 15
 
-# Tables
 SCRAPES_TABLE = "scrapes_duplicate"
 JOBS_TABLE = "jobs_duplicate"
 
 
-# ================= HELPERS =================
 def clean_text(text: str) -> str:
     if not text:
         return ""
@@ -45,15 +37,6 @@ def clean_text(text: str) -> str:
 
 
 def normalize_date(text: str) -> str:
-    """
-    Handles:
-    - '2 days ago'
-    - 'yesterday'
-    - 'today'
-    - 'Jan 19, 2026'
-    - '05-01-2026' (dd-mm-yyyy)
-    - '08-Sep-2023' (dd-MMM-yyyy)  ✅ NEW
-    """
     if not text or text == "NA":
         return None
 
@@ -61,7 +44,6 @@ def normalize_date(text: str) -> str:
     lower = text.lower()
     today = datetime.now(timezone.utc)
 
-    # relative dates
     match = re.search(r"(\d+)\s+day[s]?\s+ago", lower)
     if match:
         dt = today - timedelta(days=int(match.group(1)))
@@ -74,7 +56,6 @@ def normalize_date(text: str) -> str:
     if "today" in lower or "just now" in lower:
         return today.isoformat()
 
-    # absolute: "Jan 19, 2026"
     try:
         dt = datetime.strptime(text, "%b %d, %Y")
         dt = dt.replace(tzinfo=timezone.utc)
@@ -82,7 +63,6 @@ def normalize_date(text: str) -> str:
     except:
         pass
 
-    # absolute: "05-01-2026" (dd-mm-yyyy)
     try:
         dt = datetime.strptime(text, "%d-%m-%Y")
         dt = dt.replace(tzinfo=timezone.utc)
@@ -90,7 +70,6 @@ def normalize_date(text: str) -> str:
     except:
         pass
 
-    # ✅ absolute: "08-Sep-2023" (dd-MMM-yyyy)
     try:
         dt = datetime.strptime(text, "%d-%b-%Y")
         dt = dt.replace(tzinfo=timezone.utc)
@@ -102,15 +81,6 @@ def normalize_date(text: str) -> str:
 
 
 def parse_experience_range(exp_text: str):
-    """
-    Examples:
-    '2 years - 3 years' -> (2, 3)
-    '2-3' -> (2, 3)
-    '2 - 6 Years' -> (2, 6)
-    '5+ years' -> (5, None)
-    'Fresher' -> (0, 0)
-    '2 years' -> (2, 2)
-    """
     if not exp_text:
         return None, None
 
@@ -164,7 +134,6 @@ def click_if_exists(page, locator, wait=1200):
 
 
 def wait_for_any_layout(page, timeout=20000):
-    """Waits for either Darwinbox Card or Table layout using JS evaluation."""
     page.wait_for_timeout(1000)
     try:
         page.wait_for_function(
@@ -182,12 +151,6 @@ def wait_for_any_layout(page, timeout=20000):
 
 
 def wait_for_html_ready(page, timeout=30000):
-    """
-    Wait until:
-    - DOM is loaded
-    - document.readyState is complete
-    - Darwinbox job list layout appears
-    """
     try:
         page.wait_for_load_state("domcontentloaded", timeout=timeout)
     except:
@@ -201,7 +164,6 @@ def wait_for_html_ready(page, timeout=30000):
     wait_for_any_layout(page, timeout=timeout)
 
 
-# ================= STAGE 1: DISCOVERY (SYNC) =================
 def get_companies():
     try:
         res = supabase.table("ats_website").select("*").execute()
@@ -212,31 +174,22 @@ def get_companies():
 
 
 def save_to_supabase(scrapes_data, jobs_data):
-    """
-    1. Upload scrapes
-    2. Deduplicate internally
-    3. Check existing URLs in DB
-    4. Insert only new jobs
-    """
-    # 1. Upload Scrapes
     if scrapes_data:
         print(f"Uploading {len(scrapes_data)} scrape records...")
         try:
             supabase.table(SCRAPES_TABLE).upsert(scrapes_data).execute()
-            print("✅ Scrape records uploaded.")
+            print("Scrape records uploaded.")
         except Exception as e:
-            print(f"❌ Error uploading scrapes: {e}")
+            print(f"Error uploading scrapes: {e}")
 
     if not jobs_data:
         print("No jobs to process.")
         return
 
-    # 2. Deduplicate internally
     unique_map = {j["job_url"]: j for j in jobs_data if j.get("job_url") and j["job_url"] != "NA"}
     unique_jobs_list = list(unique_map.values())
     all_scraped_urls = list(unique_map.keys())
 
-    # 3. Check DB for existing URLs
     print(f"Checking {len(all_scraped_urls)} jobs against database...")
     existing_urls = set()
 
@@ -253,12 +206,11 @@ def save_to_supabase(scrapes_data, jobs_data):
             for row in response.data:
                 existing_urls.add(row["job_url"])
         except Exception as e:
-            print(f"   ⚠️ Error checking duplicates (Batch {i}): {e}")
+            print(f"Error checking duplicates (Batch {i}): {e}")
 
-    # 4. Insert only new
     new_jobs = [j for j in unique_jobs_list if j["job_url"] not in existing_urls]
-    print(f"   -> Skipped {len(unique_jobs_list) - len(new_jobs)} existing jobs.")
-    print(f"   -> Inserting {len(new_jobs)} new jobs...")
+    print(f"Skipped {len(unique_jobs_list) - len(new_jobs)} existing jobs.")
+    print(f"Inserting {len(new_jobs)} new jobs...")
 
     if not new_jobs:
         return
@@ -267,25 +219,24 @@ def save_to_supabase(scrapes_data, jobs_data):
         batch = new_jobs[i: i + BATCH_SIZE]
         try:
             supabase.table(JOBS_TABLE).insert(batch).execute()
-            print(f"   ↳ Uploaded batch {i} - {i + len(batch)}")
+            print(f"Uploaded batch {i} - {i + len(batch)}")
         except Exception as e:
-            print(f"   ❌ Error uploading batch: {e}")
+            print(f"Error uploading batch: {e}")
 
 
 def scrape_darwinbox_discovery(page, url, scrape_uuid):
     jobs_collected = []
-    print(f"   Scanning: {url}")
+    print(f"Scanning: {url}")
 
     try:
         page.goto(url, timeout=60000, wait_until="domcontentloaded")
         wait_for_html_ready(page, timeout=30000)
     except Exception as e:
-        print(f"   ⚠️ Connection failed: {e}")
+        print(f"Connection failed: {e}")
         return []
 
-    # --- Strategy 1: Card Layout ---
     if page.locator("ui-job-tile").count() > 0:
-        print("   -> Detected CARD layout")
+        print("Detected CARD layout")
 
         while True:
             load_more = page.locator('xpath=//span[normalize-space()="Load More Jobs"]')
@@ -304,11 +255,9 @@ def scrape_darwinbox_discovery(page, url, scrape_uuid):
             if not rel_link or rel_link == "NA":
                 job_url = "NA"
 
-            job_id = uuid.uuid4().int % (2**63 - 1)
             now_iso = datetime.now(timezone.utc).isoformat()
 
             jobs_collected.append({
-                "id": job_id,
                 "created_at": now_iso,
                 "updated_at": now_iso,
                 "scrape_id": scrape_uuid,
@@ -316,20 +265,16 @@ def scrape_darwinbox_discovery(page, url, scrape_uuid):
                 "job_url": job_url,
                 "is_active": True,
                 "department": dept if dept != "NA" else None,
-
-                # not available in card layout usually
                 "location": None,
                 "job_type": None,
                 "published_date": None,
-
                 "min_exp": None,
                 "max_exp": None,
                 "original_description": None
             })
 
-    # --- Strategy 2: Table Layout ---
     elif page.locator("table.db-table-one").count() > 0:
-        print("   -> Detected TABLE layout")
+        print("Detected TABLE layout")
         try:
             page.wait_for_selector("table.db-table-one tbody tr", timeout=15000)
         except:
@@ -358,23 +303,19 @@ def scrape_darwinbox_discovery(page, url, scrape_uuid):
                 if not rel_link or rel_link == "NA":
                     job_url = "NA"
 
-                job_id = uuid.uuid4().int % (2**63 - 1)
                 now_iso = datetime.now(timezone.utc).isoformat()
 
                 jobs_collected.append({
-                    "id": job_id,
                     "created_at": now_iso,
                     "updated_at": now_iso,
                     "scrape_id": scrape_uuid,
                     "title": title,
                     "job_url": job_url,
                     "is_active": True,
-
                     "published_date": normalize_date(posted_raw),
                     "job_type": emp_type if emp_type != "NA" else None,
                     "department": dept if dept != "NA" else None,
                     "location": location if location != "NA" else None,
-
                     "min_exp": None,
                     "max_exp": None,
                     "original_description": None
@@ -387,7 +328,7 @@ def scrape_darwinbox_discovery(page, url, scrape_uuid):
             else:
                 break
     else:
-        print("   ⚠️ No recognizable jobs found (Layout check failed).")
+        print("No recognizable jobs found.")
 
     return jobs_collected
 
@@ -442,7 +383,7 @@ def run_stage_1_discovery():
                     all_jobs.extend(company_jobs)
 
             except Exception as e:
-                print(f"   ❌ Failed: {e}")
+                print(f"Failed: {e}")
                 finish_iso = datetime.now(timezone.utc).isoformat()
                 scrape_record["status"] = "failed"
                 scrape_record["finished_at"] = finish_iso
@@ -467,7 +408,6 @@ def run_stage_1_discovery():
     print(f"Stage 1 Runtime: {time.time() - start_time:.2f}s")
 
 
-# ================= STAGE 2: ENRICHMENT (ASYNC) =================
 def get_pending_darwinbox_jobs():
     print("Fetching pending Darwinbox jobs from Supabase...")
     try:
@@ -500,19 +440,12 @@ def update_job_sync(job_id, payload):
         if clean_payload:
             clean_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
             supabase.table(JOBS_TABLE).update(clean_payload).eq("id", job_id).execute()
-            print(f"   ✅ [ID {job_id}] Updated")
+            print(f"[ID {job_id}] Updated")
     except Exception as e:
-        print(f"   ❌ [ID {job_id}] Update Failed: {e}")
+        print(f"[ID {job_id}] Update Failed: {e}")
 
 
 async def extract_details_async(page):
-    """
-    Extracts:
-    - Description
-    - Location / Type / Department
-    - Experience -> min/max
-    - Published date from Updated Date / Job posted on
-    """
     data = {
         "original_description": None,
         "location": None,
@@ -522,7 +455,6 @@ async def extract_details_async(page):
         "published_raw": None,
     }
 
-    # === 1) DESCRIPTION ===
     candidates = [".jd-container", ".job-summary", ".jd", ".job-description"]
     for selector in candidates:
         try:
@@ -535,7 +467,6 @@ async def extract_details_async(page):
         except:
             continue
 
-    # === 2) CARD Layout Snapshot (.section.mobile-section .grid-item) ===
     try:
         snapshot_items = page.locator(".section.mobile-section .grid-item")
         if await snapshot_items.count() > 0:
@@ -562,7 +493,6 @@ async def extract_details_async(page):
     except:
         pass
 
-    # === 3) TABLE Layout Job Details (.job-details-item label/p) ===
     try:
         details = page.locator(".job-details .job-details-item")
         if await details.count() > 0:
@@ -587,7 +517,6 @@ async def extract_details_async(page):
     except:
         pass
 
-    # direct selector for experience-range
     if not data.get("experience_text"):
         try:
             exp_item = page.locator(".job-details-item.experience-range p")
@@ -647,7 +576,7 @@ async def process_job(sem, context, job):
             await asyncio.to_thread(update_job_sync, job_id, payload)
 
         except Exception as e:
-            print(f"   ❌ [ID {job_id}] Failed: {str(e)[:80]}")
+            print(f"[ID {job_id}] Failed: {str(e)[:80]}")
         finally:
             await page.close()
 
@@ -675,12 +604,7 @@ async def run_stage_2_enrichment():
     print("Enrichment completed.")
 
 
-# ================= FINAL EXPORT (COMBINED CSV) =================
 def export_darwinbox_jobs_backup_from_db():
-    """
-    Exports latest Darwinbox jobs (after Stage-2 enrichment)
-    so CSV contains Stage-1 + Stage-2 combined data.
-    """
     print("\nExporting FINAL Darwinbox jobs backup (Stage 1 + Stage 2) to CSV...")
 
     try:
@@ -690,7 +614,7 @@ def export_darwinbox_jobs_backup_from_db():
             .execute()
         )
     except Exception as e:
-        print(f"❌ Error exporting jobs: {e}")
+        print(f"Error exporting jobs: {e}")
         return
 
     if not res.data:
@@ -699,27 +623,21 @@ def export_darwinbox_jobs_backup_from_db():
 
     df = pd.DataFrame(res.data)
 
-    # Flatten ats_name
     if "scrapes_duplicate" in df.columns:
         df["ats_name"] = df["scrapes_duplicate"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
-    # Filter only Darwinbox
     df = df[df["ats_name"].str.lower().str.contains("darwinbox", na=False)].copy()
 
-    # Drop nested JSON column
     if "scrapes_duplicate" in df.columns:
         df.drop(columns=["scrapes_duplicate"], inplace=True)
 
     df.to_csv(OUTPUT_JOBS_FILE, index=False)
-    print(f"✅ Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")
+    print(f"Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")
 
 
-# ================= MAIN =================
 if __name__ == "__main__":
     run_stage_1_discovery()
     asyncio.run(run_stage_2_enrichment())
-
-    # FINAL CSV contains BOTH stage-1 and stage-2
     export_darwinbox_jobs_backup_from_db()

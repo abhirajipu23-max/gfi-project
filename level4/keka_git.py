@@ -12,7 +12,6 @@ from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# ================= CONFIGURATION =================
 load_dotenv()
 
 SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
@@ -29,10 +28,6 @@ JOBS_TABLE = "jobs_duplicate"
 BATCH_SIZE = 100
 MAX_CONCURRENT_PAGES = 5
 
-# ---------------------------
-# HELPERS
-# ---------------------------
-
 JOB_CARD_SELECTOR = (
     "a.kh-card, "
     "a.kh-job-card, "
@@ -40,17 +35,12 @@ JOB_CARD_SELECTOR = (
     "a[href*='jobdetails']"
 )
 
+
 def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip() if text else ""
 
+
 def normalize_posted_date(text: str) -> str:
-    """
-    Convert:
-    - '2 days ago'
-    - 'yesterday'
-    - 'today'
-    into ISO datetime
-    """
     if not text:
         return None
 
@@ -71,14 +61,8 @@ def normalize_posted_date(text: str) -> str:
 
     return None
 
+
 def parse_experience(exp_text: str):
-    """
-    Handles:
-    - fresher => (0,0)
-    - 5+ => (5,None)
-    - 2-5 => (2,5)
-    - 2 years => (2,2)
-    """
     if not exp_text:
         return None, None
 
@@ -102,10 +86,8 @@ def parse_experience(exp_text: str):
 
     return None, None
 
+
 def wait_for_html_ready_sync(page, timeout=20000):
-    """
-    Reliable wait for JS-heavy pages (Sync Playwright).
-    """
     try:
         page.wait_for_load_state("domcontentloaded", timeout=timeout)
     except:
@@ -122,12 +104,7 @@ def wait_for_html_ready_sync(page, timeout=20000):
         pass
 
 
-# ---------------------------
-# STAGE 1: DISCOVERY (Sync)
-# ---------------------------
-
 def get_companies():
-    """Fetch companies from the 'ats_website' table."""
     try:
         res = supabase.table("ats_website").select("*").execute()
         return pd.DataFrame(res.data)
@@ -135,33 +112,25 @@ def get_companies():
         print(f"Error fetching companies: {e}")
         return pd.DataFrame()
 
+
 def save_to_supabase(scrapes_data, jobs_data):
-    """
-    1. Upload scrape history
-    2. Deduplicate internally
-    3. Check DB for existing job URLs
-    4. Insert only new jobs
-    """
-    # 1) Upload Scrapes
     if scrapes_data:
         print(f"Uploading {len(scrapes_data)} scrape records...")
         try:
             supabase.table(SCRAPES_TABLE).upsert(scrapes_data).execute()
-            print("✅ Scrape records uploaded.")
+            print("Scrape records uploaded.")
         except Exception as e:
-            print(f"❌ Error uploading scrapes: {e}")
+            print(f"Error uploading scrapes: {e}")
             return
 
     if not jobs_data:
         print("No jobs to process.")
         return
 
-    # 2) Deduplicate internally
     unique_map = {j["job_url"]: j for j in jobs_data if j.get("job_url")}
     unique_jobs_list = list(unique_map.values())
     all_scraped_urls = list(unique_map.keys())
 
-    # 3) Check DB for existing URLs
     print(f"Checking {len(all_scraped_urls)} jobs against database to skip duplicates...")
     existing_urls = set()
 
@@ -178,43 +147,43 @@ def save_to_supabase(scrapes_data, jobs_data):
             for row in response.data:
                 existing_urls.add(row["job_url"])
         except Exception as e:
-            print(f"   ⚠️ Error checking duplicates (Batch {i}): {e}")
+            print(f"Error checking duplicates (Batch {i}): {e}")
 
-    # 4) Insert only new jobs
     new_jobs = [j for j in unique_jobs_list if j["job_url"] not in existing_urls]
 
-    print(f"   -> Skipped {len(unique_jobs_list) - len(new_jobs)} existing jobs.")
-    print(f"   -> Inserting {len(new_jobs)} new jobs...")
+    print(f"Skipped {len(unique_jobs_list) - len(new_jobs)} existing jobs.")
+    print(f"Inserting {len(new_jobs)} new jobs...")
 
     if not new_jobs:
-        print("✅ No new jobs to insert.")
+        print("No new jobs to insert.")
         return
 
     for i in range(0, len(new_jobs), BATCH_SIZE):
         batch = new_jobs[i : i + BATCH_SIZE]
         try:
             supabase.table(JOBS_TABLE).insert(batch).execute()
-            print(f"   ↳ Uploaded batch {i} - {i + len(batch)}")
+            print(f"Uploaded batch {i} - {i + len(batch)}")
         except Exception as e:
-            print(f"   ❌ Error uploading batch: {e}")
+            print(f"Error uploading batch: {e}")
+
 
 def scrape_keka_jobs(page, url, scrape_uuid):
     jobs = []
-    print(f"   Scanning: {url}")
+    print(f"Scanning: {url}")
 
     try:
         page.goto(url, timeout=60000, wait_until="domcontentloaded")
         wait_for_html_ready_sync(page, timeout=25000)
     except SyncTimeoutError:
-        print(f"   ⚠️ Timeout reaching: {url}")
+        print(f"Timeout reaching: {url}")
         return []
     except Exception as e:
-        print(f"   ⚠️ Connection error: {e}")
+        print(f"Connection error: {e}")
         return []
 
     job_cards = page.query_selector_all(JOB_CARD_SELECTOR)
     if not job_cards:
-        print(f"   ⚠️ No job cards found on {url}")
+        print(f"No job cards found on {url}")
         return []
 
     for card in job_cards:
@@ -233,22 +202,16 @@ def scrape_keka_jobs(page, url, scrape_uuid):
         job_type = safe_text(".job-type, .type")
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        job_id = uuid.uuid4().int % (2**63 - 1)
 
         jobs.append({
-            "id": job_id,
             "created_at": now_iso,
             "updated_at": now_iso,
             "scrape_id": scrape_uuid,
             "title": title,
             "job_url": job_url,
             "is_active": True,
-
-            # Stage-1 fields
             "published_date": normalize_posted_date(posted_raw),
             "job_type": job_type if job_type else None,
-
-            # Stage-2 fields (null now)
             "original_description": None,
             "internal_slug": None,
             "min_exp": None,
@@ -257,6 +220,7 @@ def scrape_keka_jobs(page, url, scrape_uuid):
         })
 
     return jobs
+
 
 def run_stage_1_discovery():
     print("\n--- STAGE 1: DISCOVERY ---")
@@ -307,7 +271,7 @@ def run_stage_1_discovery():
                     all_jobs.extend(company_jobs)
 
             except Exception as e:
-                print(f"   ❌ Critical failure: {e}")
+                print(f"Critical failure: {e}")
                 finish_iso = datetime.now(timezone.utc).isoformat()
                 scrape_record["finished_at"] = finish_iso
                 scrape_record["updated_at"] = finish_iso
@@ -319,7 +283,6 @@ def run_stage_1_discovery():
 
     clean_jobs = [j for j in all_jobs if j.get("job_url")]
 
-    # Stage-1 snapshot backups
     if all_scrapes:
         pd.DataFrame(all_scrapes).to_csv(OUTPUT_SCRAPES_FILE, index=False)
         print(f"\nBackup saved: {OUTPUT_SCRAPES_FILE}")
@@ -332,15 +295,7 @@ def run_stage_1_discovery():
     print(f"Stage 1 Runtime: {time.time() - start_time:.2f}s")
 
 
-# ---------------------------
-# STAGE 2: ENRICHMENT (Async)
-# ---------------------------
-
 def get_keka_jobs_from_supabase():
-    """
-    Fetch ONLY pending jobs where original_description is null
-    and ATS is Keka.
-    """
     print("Fetching pending Keka jobs from Supabase...")
     try:
         res = (
@@ -366,17 +321,16 @@ def get_keka_jobs_from_supabase():
     print(f"Total pending jobs: {len(df)} | Keka jobs to scrape: {len(keka_df)}")
     return keka_df
 
+
 def update_supabase_record(job_id, payload):
     try:
         supabase.table(JOBS_TABLE).update(payload).eq("id", job_id).execute()
-        print(f"   ✅ Updated Job ID {job_id}")
+        print(f"Updated Job ID {job_id}")
     except Exception as e:
-        print(f"   ❌ Failed to update Job ID {job_id}: {e}")
+        print(f"Failed to update Job ID {job_id}: {e}")
+
 
 async def wait_for_html_ready_async(page, timeout=25000):
-    """
-    Reliable wait for JS-heavy pages (Async Playwright).
-    """
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=timeout)
     except:
@@ -387,7 +341,6 @@ async def wait_for_html_ready_async(page, timeout=25000):
     except:
         pass
 
-    # Wait for either description container or icon rows
     try:
         await page.wait_for_selector(
             ".job-description-container, span.ki-user-tie, span.ki-location, span.ki-briefcase",
@@ -395,6 +348,7 @@ async def wait_for_html_ready_async(page, timeout=25000):
         )
     except:
         pass
+
 
 async def scrape_job_async(browser, row, semaphore):
     job_url = row.get("job_url", "")
@@ -451,9 +405,10 @@ async def scrape_job_async(browser, row, semaphore):
             await asyncio.to_thread(update_supabase_record, job_id, payload)
 
         except Exception as e:
-            print(f"   ⚠️ Failed: {job_url[-40:]} | {e}")
+            print(f"Failed: {job_url[-40:]} | {e}")
         finally:
             await page.close()
+
 
 async def run_stage_2_enrichment():
     print("\n--- STAGE 2: ENRICHMENT ---")
@@ -475,15 +430,7 @@ async def run_stage_2_enrichment():
     print("Enrichment completed.")
 
 
-# ---------------------------
-# FINAL BACKUP EXPORT (Stage 1 + Stage 2 Combined)
-# ---------------------------
-
 def export_keka_jobs_backup_from_db():
-    """
-    Exports the latest Keka jobs (including Stage-2 enrichment updates)
-    into keka_jobs.csv (FINAL combined output).
-    """
     print("\nExporting final Keka jobs backup (Stage 1 + Stage 2) to CSV...")
 
     try:
@@ -493,7 +440,7 @@ def export_keka_jobs_backup_from_db():
             .execute()
         )
     except Exception as e:
-        print(f"❌ Error exporting jobs: {e}")
+        print(f"Error exporting jobs: {e}")
         return
 
     if not res.data:
@@ -502,29 +449,21 @@ def export_keka_jobs_backup_from_db():
 
     df = pd.DataFrame(res.data)
 
-    # Flatten ats_name
     if "scrapes_duplicate" in df.columns:
         df["ats_name"] = df["scrapes_duplicate"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
-    # Only Keka
     df = df[df["ats_name"].str.lower().str.contains("keka", na=False)].copy()
 
-    # Drop nested JSON
     if "scrapes_duplicate" in df.columns:
         df.drop(columns=["scrapes_duplicate"], inplace=True)
 
-    # ✅ FINAL combined write
     df.to_csv(OUTPUT_JOBS_FILE, index=False)
+    print(f"Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")
 
-    print(f"✅ Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")
 
-
-# ================= MAIN =================
 if __name__ == "__main__":
     run_stage_1_discovery()
     asyncio.run(run_stage_2_enrichment())
-
-    # FINAL CSV contains BOTH stage-1 and stage-2 data
     export_keka_jobs_backup_from_db()

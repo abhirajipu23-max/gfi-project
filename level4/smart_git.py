@@ -6,15 +6,12 @@ import pandas as pd
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
-# Playwright
 from playwright.sync_api import sync_playwright
 from playwright.async_api import async_playwright
 
-# Database
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# ================= CONFIGURATION =================
 load_dotenv()
 SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
 SUPABASE_KEY = "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa"
@@ -24,10 +21,7 @@ SCRAPES_TABLE = "scrapes_duplicate"
 FINAL_BACKUP_FILE = "smartrecruiters_jobs_backup.csv"
 
 
-# ================= UTILS CLASS =================
 class ScraperUtils:
-    """Static helper methods for text processing and DOM safety."""
-
     @staticmethod
     def clean_text(text: str) -> str:
         if not text:
@@ -51,10 +45,7 @@ class ScraperUtils:
             return "NA"
 
 
-# ================= DATABASE MANAGER =================
 class SupabaseManager:
-    """Handles all interactions with Supabase."""
-
     def __init__(self, url=SUPABASE_URL, key=SUPABASE_KEY):
         self.client: Client = create_client(url, key)
 
@@ -70,7 +61,6 @@ class SupabaseManager:
             return pd.DataFrame()
 
     def fetch_pending_jobs(self, ats_filter="SmartRecruiters"):
-        """Fetches jobs from jobs_duplicate that need enrichment."""
         try:
             print("Fetching pending SmartRecruiters jobs...")
             res = (
@@ -94,9 +84,9 @@ class SupabaseManager:
         try:
             print(f"Uploading {len(scrapes_data)} scrape records...")
             self.client.table(SCRAPES_TABLE).upsert(scrapes_data).execute()
-            print("✅ Scrape records uploaded.")
+            print("Scrape records uploaded.")
         except Exception as e:
-            print(f"❌ Error uploading scrapes: {e}")
+            print(f"Error uploading scrapes: {e}")
 
     def save_jobs_deduplicated(self, jobs_data):
         if not jobs_data:
@@ -118,18 +108,18 @@ class SupabaseManager:
                 for row in res.data:
                     existing_urls.add(row["job_url"])
             except Exception as e:
-                print(f"   ⚠️ Duplicate check error: {e}")
+                print(f"Duplicate check error: {e}")
 
         new_jobs = [j for j in unique_jobs_list if j["job_url"] not in existing_urls]
-        print(f"   -> Inserting {len(new_jobs)} new jobs ({len(unique_jobs_list) - len(new_jobs)} skipped).")
+        print(f"Inserting {len(new_jobs)} new jobs ({len(unique_jobs_list) - len(new_jobs)} skipped).")
 
         for i in range(0, len(new_jobs), batch_size):
             batch = new_jobs[i : i + batch_size]
             try:
                 self.client.table(JOBS_TABLE).insert(batch).execute()
-                print(f"   ↳ Uploaded batch {i}-{i+len(batch)}")
+                print(f"Uploaded batch {i}-{i+len(batch)}")
             except Exception as e:
-                print(f"   ❌ Error inserting batch: {e}")
+                print(f"Error inserting batch: {e}")
 
     def update_job(self, job_id, payload):
         try:
@@ -137,81 +127,64 @@ class SupabaseManager:
             if clean_payload:
                 clean_payload["updated_at"] = datetime.utcnow().isoformat()
                 self.client.table(JOBS_TABLE).update(clean_payload).eq("id", job_id).execute()
-                print(f"   ✅ [ID {job_id}] Updated")
+                print(f"Updated ID {job_id}")
         except Exception as e:
-            print(f"   ❌ [ID {job_id}] Update Failed: {e}")
+            print(f"Update Failed ID {job_id}: {e}")
 
 
-# ================= BACKUP EXPORT (Stage-1 + Stage-2 combined) =================
 def export_smartrecruiters_jobs_backup_from_db(db: SupabaseManager):
-    """
-    Final backup export from DB so it contains BOTH:
-      - Stage-1 discovered jobs
-      - Stage-2 enriched jobs
-    """
-    print("\n📦 Exporting SmartRecruiters FINAL backup CSV (Stage-1 + Stage-2 combined)...")
+    print("\nExporting SmartRecruiters backup CSV...")
 
     try:
         res = db.client.table(JOBS_TABLE).select("* , scrapes_duplicate(ats_website(ats_name))").execute()
     except Exception as e:
-        print(f"❌ Export failed: {e}")
+        print(f"Export failed: {e}")
         return
 
     if not res.data:
-        print("⚠️ No jobs found in DB to export.")
+        print("No jobs found in DB to export.")
         return
 
     df = pd.DataFrame(res.data)
 
-    # Extract ats_name from nested join
     if "scrapes_duplicate" in df.columns:
         df["ats_name"] = df["scrapes_duplicate"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
-    # Filter only SmartRecruiters jobs
     df = df[df["ats_name"].astype(str).str.lower().str.contains("smartrecruiters", na=False)].copy()
 
-    # Drop nested JSON column
     if "scrapes_duplicate" in df.columns:
         df.drop(columns=["scrapes_duplicate"], inplace=True)
 
     df.to_csv(FINAL_BACKUP_FILE, index=False)
-    print(f"✅ Backup saved: {FINAL_BACKUP_FILE} | Rows: {len(df)}")
+    print(f"Backup saved: {FINAL_BACKUP_FILE} | Rows: {len(df)}")
 
 
-# ================= CLASS: STAGE 1 (DISCOVERY) =================
 class SmartRecruitersDiscovery:
-    """Class responsible for scraping SmartRecruiters job lists."""
-
     def __init__(self, db_manager: SupabaseManager):
         self.db = db_manager
 
     def scrape_site(self, page, url, scrape_uuid):
         jobs_collected = []
-        print(f"   Scanning: {url}")
+        print(f"Scanning: {url}")
 
         try:
             page.goto(url, timeout=60000)
 
-            # Wait for main container
             try:
                 page.wait_for_selector('xpath=//div[contains(@class,"openings-body")]', timeout=15000)
             except:
-                print("     ⚠️ No job list found (or layout diff).")
+                print("No job list found.")
                 return []
 
-            # Sections (usually by Location)
             sections = page.locator('xpath=//section[contains(@class,"openings-section")]')
             if sections.count() == 0:
-                print("     ⚠️ No sections found")
+                print("No sections found")
                 return []
-
-            print(f"     ↳ Found {sections.count()} location sections")
 
             for i in range(sections.count()):
                 section = sections.nth(i)
-
                 job_items = section.locator('xpath=.//li[contains(@class,"opening-job")]')
 
                 for j in range(job_items.count()):
@@ -226,7 +199,6 @@ class SmartRecruitersDiscovery:
 
                     jobs_collected.append(
                         {
-                            "id": uuid.uuid4().int % (2**63 - 1),
                             "created_at": datetime.now(timezone.utc).isoformat(),
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                             "scrape_id": scrape_uuid,
@@ -241,7 +213,7 @@ class SmartRecruitersDiscovery:
                     )
 
         except Exception as e:
-            print(f"     ❌ Error during scraping: {e}")
+            print(f"Error during scraping: {e}")
             return []
 
         return jobs_collected
@@ -276,7 +248,7 @@ class SmartRecruitersDiscovery:
                     if jobs:
                         all_jobs.extend(jobs)
                 except Exception as e:
-                    print(f"   ❌ Failed: {e}")
+                    print(f"Failed: {e}")
                     scrape_record["status"] = "failed"
                     scrape_record["finished_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -290,10 +262,7 @@ class SmartRecruitersDiscovery:
         print(f"Stage 1 Runtime: {time.time() - start_time:.2f}s")
 
 
-# ================= CLASS: STAGE 2 (ENRICHMENT) =================
 class SmartRecruitersEnrichment:
-    """Class responsible for enriching SmartRecruiters job details."""
-
     def __init__(self, db_manager: SupabaseManager, concurrency=10):
         self.db = db_manager
         self.concurrency = concurrency
@@ -301,14 +270,12 @@ class SmartRecruitersEnrichment:
     async def _extract_details(self, page):
         data = {"original_description": None, "location": None, "job_type": None, "department": None}
 
-        # 1. Location (Often loads dynamically via JS)
         try:
             await page.wait_for_selector(".c-spl-job-location__place", state="attached", timeout=4000)
             loc_el = page.locator(".c-spl-job-location__place").first
             if await loc_el.count() > 0:
                 data["location"] = ScraperUtils.clean_text(await loc_el.inner_text())
         except:
-            # Fallback: Meta tag
             try:
                 meta_loc = page.locator('li[itemprop="jobLocation"]').first
                 if await meta_loc.count() > 0:
@@ -317,7 +284,6 @@ class SmartRecruitersEnrichment:
             except:
                 pass
 
-        # 2. Description (Combine sections)
         try:
             desc_parts = []
 
@@ -342,7 +308,6 @@ class SmartRecruitersEnrichment:
         except:
             pass
 
-        # 3. Meta Data
         try:
             dept_meta = page.locator('meta[itemprop="industry"]').first
             if await dept_meta.count() > 0:
@@ -379,10 +344,10 @@ class SmartRecruitersEnrichment:
                 if payload["original_description"]:
                     await asyncio.to_thread(self.db.update_job, job_id, payload)
                 else:
-                    print(f"   ⚠️ [ID {job_id}] No description found.")
+                    print(f"No description found ID {job_id}")
 
             except Exception as e:
-                print(f"   ❌ [ID {job_id}] Failed: {str(e)[:50]}")
+                print(f"Failed ID {job_id}: {str(e)[:50]}")
             finally:
                 await page.close()
 
@@ -413,17 +378,13 @@ class SmartRecruitersEnrichment:
         asyncio.run(self.run_async())
 
 
-# ================= MAIN EXECUTION =================
 if __name__ == "__main__":
     db_manager = SupabaseManager()
 
-    # Run Stage 1
     discovery = SmartRecruitersDiscovery(db_manager)
     discovery.run()
 
-    # Run Stage 2
     enrichment = SmartRecruitersEnrichment(db_manager, concurrency=10)
     enrichment.run()
 
-    # ✅ Final CSV Backup (Stage-1 + Stage-2 combined)
     export_smartrecruiters_jobs_backup_from_db(db_manager)

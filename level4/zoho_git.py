@@ -17,9 +17,6 @@ from supabase import create_client, Client
 
 load_dotenv()
 
-# ---------------------------
-# Configuration
-# ---------------------------
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ufnaxahhlblwpdomlybs.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa")
 
@@ -30,30 +27,23 @@ USER_AGENT = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-# Tables
 SCRAPES_TABLE = "scrapes_duplicate"
 JOBS_TABLE = "jobs_duplicate"
 
-# Output Files
 OUTPUT_JOBS_FILE = "zoho_jobs.csv"
 OUTPUT_SCRAPES_FILE = "zoho_scrapes.csv"
 
-# Insert/Check Batch Sizes
 INSERT_BATCH_SIZE = 100
 CHECK_BATCH_SIZE = 50
 
-# Initialize Supabase
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     print(f"Failed to initialize Supabase client: {e}")
     raise SystemExit(1)
 
-# ---------------------------
-# Helpers
-# ---------------------------
+
 def format_date_iso(s):
-    """Parses date string and returns ISO 8601 timestamptz string."""
     if not s:
         return None
 
@@ -78,8 +68,8 @@ def format_date_iso(s):
 
     return None
 
+
 def parse_experience(exp_text):
-    """Extracts min and max experience from text."""
     if not exp_text:
         return None, None
 
@@ -103,14 +93,12 @@ def parse_experience(exp_text):
 
     return None, None
 
+
 def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip() if text else ""
 
+
 def dedupe_jobs(jobs):
-    """
-    Strong dedupe: job_url + title
-    (prevents losing jobs when URLs repeat)
-    """
     seen = {}
     for j in jobs:
         if j.get("job_url"):
@@ -118,9 +106,7 @@ def dedupe_jobs(jobs):
             seen[key] = j
     return list(seen.values())
 
-# ---------------------------
-# Fetch Companies
-# ---------------------------
+
 def get_zoho_companies():
     try:
         res = supabase.table("ats_website").select("*").execute()
@@ -136,9 +122,7 @@ def get_zoho_companies():
         print(f"Error fetching companies: {e}")
         return pd.DataFrame()
 
-# ==============================================================================
-# STAGE 1: DISCOVERY
-# ==============================================================================
+
 class ZohoDiscovery:
     def __init__(self):
         self._thread_local = threading.local()
@@ -160,10 +144,8 @@ class ZohoDiscovery:
 
     def _normalize_job(self, scrape_uuid, title="", job_type="", posted="", job_url="", location=""):
         now_iso = datetime.now(timezone.utc).isoformat()
-        job_id = uuid.uuid4().int % (2**63 - 1)
 
         return {
-            "id": job_id,
             "created_at": now_iso,
             "updated_at": now_iso,
             "scrape_id": scrape_uuid,
@@ -173,8 +155,6 @@ class ZohoDiscovery:
             "published_date": format_date_iso(posted),
             "job_type": job_type if job_type else None,
             "location": location if location else None,
-
-            # Stage-2 will fill these
             "original_description": None,
             "internal_slug": None,
             "min_exp": None,
@@ -254,17 +234,14 @@ class ZohoDiscovery:
 
             soup = BeautifulSoup(r.text, "html.parser")
 
-            # Strategy 1: Table
             jobs = self._scrape_zoho_table(soup, url, scrape_uuid)
             if jobs:
                 return dedupe_jobs(jobs)
 
-            # Strategy 2: Cards
             jobs = self._scrape_zoho_layout3_cards(soup, url, scrape_uuid)
             if jobs:
                 return dedupe_jobs(jobs)
 
-            # Strategy 3: STRONG Generic fallback
             jobs = []
             anchors = soup.select(
                 "a.cw-1-title,"
@@ -309,19 +286,16 @@ class ZohoDiscovery:
             html = page.content()
             soup = BeautifulSoup(html, "html.parser")
 
-            # Strategy 1: Table
             jobs = self._scrape_zoho_table(soup, url, scrape_uuid)
             if jobs:
                 page.close()
                 return dedupe_jobs(jobs)
 
-            # Strategy 2: Cards
             jobs = self._scrape_zoho_layout3_cards(soup, url, scrape_uuid)
             if jobs:
                 page.close()
                 return dedupe_jobs(jobs)
 
-            # Strategy 3: STRONG Playwright fallback selectors
             jobs = []
             selectors = [
                 "a.cw-1-title",
@@ -398,13 +372,12 @@ class ZohoDiscovery:
         return scrape_record, jobs
 
     def save_to_db(self, scrapes, jobs):
-        # Save scrapes
         if scrapes:
             try:
                 supabase.table(SCRAPES_TABLE).upsert(scrapes).execute()
-                print("✅ Scrapes synced.")
+                print("Scrapes synced.")
             except Exception as e:
-                print(f"❌ Error saving scrapes: {e}")
+                print(f"Error saving scrapes: {e}")
 
         if not jobs:
             return
@@ -421,10 +394,10 @@ class ZohoDiscovery:
                 for r in res.data:
                     existing.add(r["job_url"])
             except Exception as e:
-                print(f"⚠️ Duplicate check error (batch {i}): {e}")
+                print(f"Duplicate check error (batch {i}): {e}")
 
         new_jobs = [j for j in jobs if j.get("job_url") and j["job_url"] not in existing]
-        print(f" -> Found {len(new_jobs)} NEW jobs to insert.")
+        print(f"Found {len(new_jobs)} new jobs to insert.")
 
         if not new_jobs:
             return
@@ -433,9 +406,9 @@ class ZohoDiscovery:
             batch = new_jobs[i:i + INSERT_BATCH_SIZE]
             try:
                 supabase.table(JOBS_TABLE).insert(batch).execute()
-                print(f"    ↳ Inserted batch {i} - {i + len(batch)}")
+                print(f"Inserted batch {i} - {i + len(batch)}")
             except Exception as e:
-                print(f"❌ Insert error: {e}")
+                print(f"Insert error: {e}")
 
     def run(self, df):
         print(f"\n--- STAGE 1: DISCOVERY ({len(df)} companies) ---")
@@ -449,21 +422,18 @@ class ZohoDiscovery:
                     all_scrapes.append(res[0])
                     all_jobs.extend(res[1])
 
-        # Stage-1 Snapshot CSV
         if all_scrapes:
             pd.DataFrame(all_scrapes).to_csv(OUTPUT_SCRAPES_FILE, index=False)
-            print(f"✅ Stage-1 scrapes snapshot saved: {OUTPUT_SCRAPES_FILE}")
+            print(f"Stage-1 scrapes snapshot saved: {OUTPUT_SCRAPES_FILE}")
 
         if all_jobs:
             pd.DataFrame(all_jobs).to_csv(OUTPUT_JOBS_FILE, index=False)
-            print(f"✅ Stage-1 jobs snapshot saved: {OUTPUT_JOBS_FILE}")
+            print(f"Stage-1 jobs snapshot saved: {OUTPUT_JOBS_FILE}")
 
         self.save_to_db(all_scrapes, all_jobs)
         print("--- STAGE 1 COMPLETE ---")
 
-# ==============================================================================
-# STAGE 2: ENRICHMENT
-# ==============================================================================
+
 class ZohoEnrichment:
     def get_pending_jobs(self):
         print("\n--- STAGE 2: ENRICHMENT (Fetching pending jobs) ---")
@@ -505,7 +475,6 @@ class ZohoEnrichment:
             "industry": "",
         }
 
-        # Title
         for sel in [
             "div.tem3-titleBlock h1",
             "div.tem4-col2_hdr h2",
@@ -518,7 +487,6 @@ class ZohoEnrichment:
                 data["title"] = el.get_text(" ", strip=True).split("\n")[0].strip()
                 break
 
-        # Description
         for sel in [
             "div.job-dec-block_new",
             "div.cw-jobdescription",
@@ -531,7 +499,6 @@ class ZohoEnrichment:
                 data["description"] = el.get_text("\n", strip=True)
                 break
 
-        # Helper for summary list
         def apply_label_value(label, value):
             if not label or not value:
                 return
@@ -565,7 +532,6 @@ class ZohoEnrichment:
                 else:
                     data["raw_location"] += f", {value}"
 
-        # Summary list
         summary_items = soup.select("ul.cw-summary-list li")
         for li in summary_items:
             spans = li.find_all("span")
@@ -573,7 +539,6 @@ class ZohoEnrichment:
                 continue
             apply_label_value(spans[0].get_text(strip=True), spans[1].get_text(strip=True))
 
-        # Tem3 blocks
         tem3_blocks = soup.select("div.tem3ContentBlock div.tem3-TextCont")
         for block in tem3_blocks:
             label_el = block.find("span")
@@ -592,7 +557,6 @@ class ZohoEnrichment:
 
         details = None
 
-        # 1) Try BS4
         try:
             r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=20)
             if r.status_code == 200:
@@ -600,7 +564,6 @@ class ZohoEnrichment:
         except:
             pass
 
-        # 2) Try Playwright if BS4 failed
         if not details:
             try:
                 with sync_playwright() as p:
@@ -613,10 +576,10 @@ class ZohoEnrichment:
 
                 details = self.parse_job_details_from_soup(BeautifulSoup(html, "html.parser"))
             except Exception as e:
-                print(f"   [ID {job_id}] Playwright failed: {e}")
+                print(f"Playwright failed ID {job_id}: {e}")
 
         if not details:
-            print(f"   ❌ [ID {job_id}] Failed to parse details.")
+            print(f"Failed to parse details ID {job_id}")
             return None
 
         min_exp, max_exp = parse_experience(details["experience"])
@@ -635,7 +598,6 @@ class ZohoEnrichment:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # remove None so we don't overwrite existing fields with null
         payload = {k: v for k, v in payload.items() if v is not None}
 
         return job_id, payload
@@ -660,15 +622,13 @@ class ZohoEnrichment:
         for job_id, payload in updates:
             try:
                 supabase.table(JOBS_TABLE).update(payload).eq("id", job_id).execute()
-                print(f"   ✅ [ID {job_id}] Updated")
+                print(f"Updated ID {job_id}")
             except Exception as e:
-                print(f"   ❌ [ID {job_id}] DB Error: {e}")
+                print(f"DB Error ID {job_id}: {e}")
 
         print("--- STAGE 2 COMPLETE ---")
 
-# ==============================================================================
-# FINAL EXPORT: Stage-1 + Stage-2 Combined CSV
-# ==============================================================================
+
 def export_zoho_jobs_backup_from_db():
     print("\nExporting FINAL Zoho jobs backup (Stage 1 + Stage 2) to CSV...")
 
@@ -679,7 +639,7 @@ def export_zoho_jobs_backup_from_db():
             .execute()
         )
     except Exception as e:
-        print(f"❌ Error exporting jobs: {e}")
+        print(f"Error exporting jobs: {e}")
         return
 
     if not res.data:
@@ -688,25 +648,20 @@ def export_zoho_jobs_backup_from_db():
 
     df = pd.DataFrame(res.data)
 
-    # Flatten ats_name
     if "scrapes_duplicate" in df.columns:
         df["ats_name"] = df["scrapes_duplicate"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
-    # Filter Zoho Recruit only
     df = df[df["ats_name"].astype(str).str.lower().str.contains("zoho recruit", na=False)].copy()
 
-    # Drop nested json
     if "scrapes_duplicate" in df.columns:
         df.drop(columns=["scrapes_duplicate"], inplace=True)
 
     df.to_csv(OUTPUT_JOBS_FILE, index=False)
-    print(f"✅ Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")
+    print(f"Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")
 
-# ==============================================================================
-# MAIN
-# ==============================================================================
+
 if __name__ == "__main__":
     start = time.time()
 
@@ -722,7 +677,6 @@ if __name__ == "__main__":
         enrichment = ZohoEnrichment()
         enrichment.run()
 
-        # ✅ Final CSV (Stage-1 + Stage-2 combined)
         export_zoho_jobs_backup_from_db()
 
     print(f"\nTotal Runtime: {time.time() - start:.2f}s")

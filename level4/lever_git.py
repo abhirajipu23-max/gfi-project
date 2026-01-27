@@ -13,8 +13,6 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# ============================================================
-# CONFIG
 load_dotenv()
 
 SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
@@ -31,12 +29,7 @@ INSERT_BATCH_SIZE = 100
 CHECK_BATCH_SIZE = 100
 
 
-# ============================================================
-# UTILS
-# ============================================================
 class ScraperUtils:
-    """Static helper methods for text processing, date parsing, and DOM safety."""
-
     @staticmethod
     def clean_text(text: str) -> str:
         if not text:
@@ -61,14 +54,6 @@ class ScraperUtils:
 
     @staticmethod
     def normalize_job_type(text: str):
-        """
-        Normalize Lever/Workable style job types:
-        Full time, Full-Time, Full Time / -> Full time
-        Part time -> Part time
-        Contract -> Contract
-        Internship -> Internship
-        Temporary -> Temporary
-        """
         if not text:
             return None
 
@@ -91,14 +76,6 @@ class ScraperUtils:
 
     @staticmethod
     def format_date_iso(date_str: str):
-        """
-        Standardize date for DB timestamptz ISO format.
-        Supports:
-        - April 30, 2025
-        - Apr 30, 2025
-        - 2025-04-30
-        - 30-04-2025
-        """
         if not date_str:
             return None
 
@@ -123,12 +100,7 @@ class ScraperUtils:
         return None
 
 
-# ============================================================
-# DB MANAGER
-# ============================================================
 class SupabaseManager:
-    """Handles all interactions with Supabase."""
-
     def __init__(self, url=SUPABASE_URL, key=SUPABASE_KEY):
         self.client: Client = create_client(url, key)
 
@@ -144,14 +116,11 @@ class SupabaseManager:
             return pd.DataFrame()
 
     def fetch_pending_jobs(self, ats_filter="Lever"):
-        """Fetch jobs needing enrichment (original_description is NULL)."""
         try:
             print(f"Fetching pending {ats_filter} jobs...")
             res = (
                 self.client.table(JOBS_TABLE)
-                .select(
-                    "id, job_url, location, job_type, department, scrapes_duplicate(ats_website(ats_name))"
-                )
+                .select("id, job_url, location, job_type, department, scrapes_duplicate(ats_website(ats_name))")
                 .is_("original_description", "null")
                 .execute()
             )
@@ -173,12 +142,11 @@ class SupabaseManager:
         try:
             print(f"Uploading {len(scrapes_data)} scrape records...")
             self.client.table(SCRAPES_TABLE).upsert(scrapes_data).execute()
-            print("✅ Scrape records uploaded.")
+            print("Scrape records uploaded.")
         except Exception as e:
-            print(f"❌ Error uploading scrapes: {e}")
+            print(f"Error uploading scrapes: {e}")
 
     def save_jobs_deduplicated(self, jobs_data):
-        """Deduplicate by job_url, insert only NEW jobs."""
         if not jobs_data:
             print("No jobs to process.")
             return
@@ -197,21 +165,20 @@ class SupabaseManager:
                 for row in res.data:
                     existing_urls.add(row["job_url"])
             except Exception as e:
-                print(f"   ⚠️ Duplicate check error: {e}")
+                print(f"Duplicate check error: {e}")
 
         new_jobs = [j for j in unique_jobs_list if j["job_url"] not in existing_urls]
-        print(f"   -> Inserting {len(new_jobs)} new jobs ({len(unique_jobs_list) - len(new_jobs)} skipped).")
+        print(f"Inserting {len(new_jobs)} new jobs ({len(unique_jobs_list) - len(new_jobs)} skipped).")
 
         for i in range(0, len(new_jobs), INSERT_BATCH_SIZE):
             batch = new_jobs[i : i + INSERT_BATCH_SIZE]
             try:
                 self.client.table(JOBS_TABLE).insert(batch).execute()
-                print(f"   ↳ Uploaded batch {i}-{i+len(batch)}")
+                print(f"Uploaded batch {i}-{i+len(batch)}")
             except Exception as e:
-                print(f"   ❌ Error inserting batch: {e}")
+                print(f"Error inserting batch: {e}")
 
     def bulk_update_jobs(self, updates, batch_size=50):
-        """Fast bulk update using upsert on jobs_duplicate."""
         if not updates:
             return
 
@@ -219,23 +186,18 @@ class SupabaseManager:
             for i in range(0, len(updates), batch_size):
                 batch = updates[i : i + batch_size]
                 self.client.table(JOBS_TABLE).upsert(batch).execute()
-                print(f"   ✅ Bulk updated batch {i}-{i+len(batch)}")
+                print(f"Bulk updated batch {i}-{i+len(batch)}")
         except Exception as e:
             print(f"Bulk update failed: {e}")
 
 
-# ============================================================
-# STAGE 1: DISCOVERY (LEVER)
-# ============================================================
 class LeverDiscovery:
-    """Scrapes Lever job listing pages (Stage 1)."""
-
     def __init__(self, db_manager: SupabaseManager):
         self.db = db_manager
 
     def scrape_site(self, page, url, scrape_uuid):
         jobs_collected = []
-        print(f"   Scanning: {url}")
+        print(f"Scanning: {url}")
 
         try:
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
@@ -243,12 +205,12 @@ class LeverDiscovery:
             try:
                 page.wait_for_selector('xpath=//div[contains(@class,"posting")]', timeout=15000)
             except:
-                print("     ⚠️ No job list found or structure changed.")
+                print("No job list found or structure changed.")
                 return []
 
             jobs = page.locator('xpath=//div[contains(@class,"posting")]')
             count = jobs.count()
-            print(f"     ↳ Found {count} jobs")
+            print(f"Found {count} jobs")
 
             for i in range(count):
                 job = jobs.nth(i)
@@ -268,13 +230,11 @@ class LeverDiscovery:
                 if title == "NA" or raw_href == "NA":
                     continue
 
-                # Lever sometimes gives relative/absolute links
                 job_url = urljoin(url, raw_href)
-
                 now_iso = datetime.now(timezone.utc).isoformat()
+
                 jobs_collected.append(
                     {
-                        "id": uuid.uuid4().int % (2**63 - 1),
                         "created_at": now_iso,
                         "updated_at": now_iso,
                         "scrape_id": scrape_uuid,
@@ -290,7 +250,7 @@ class LeverDiscovery:
                 )
 
         except Exception as e:
-            print(f"     ❌ Error during scraping: {e}")
+            print(f"Error during scraping: {e}")
             return []
 
         return jobs_collected
@@ -329,7 +289,7 @@ class LeverDiscovery:
                     if jobs:
                         all_jobs.extend(jobs)
                 except Exception as e:
-                    print(f"   ❌ Failed: {e}")
+                    print(f"Failed: {e}")
                     scrape_record["status"] = "failed"
                     scrape_record["finished_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -337,16 +297,14 @@ class LeverDiscovery:
 
             browser.close()
 
-        # Save snapshots
         if all_scrapes:
             pd.DataFrame(all_scrapes).to_csv(OUTPUT_SCRAPES_FILE, index=False)
-            print(f"✅ Stage-1 scrapes snapshot saved: {OUTPUT_SCRAPES_FILE}")
+            print(f"Stage-1 scrapes snapshot saved: {OUTPUT_SCRAPES_FILE}")
 
         if all_jobs:
             pd.DataFrame(all_jobs).to_csv(OUTPUT_JOBS_FILE, index=False)
-            print(f"✅ Stage-1 jobs snapshot saved: {OUTPUT_JOBS_FILE}")
+            print(f"Stage-1 jobs snapshot saved: {OUTPUT_JOBS_FILE}")
 
-        # Save to DB
         clean_jobs = [j for j in all_jobs if j.get("job_url") and j["job_url"] != "NA"]
         self.db.save_scrapes(all_scrapes)
         self.db.save_jobs_deduplicated(clean_jobs)
@@ -355,17 +313,7 @@ class LeverDiscovery:
         print("--- STAGE 1 COMPLETE ---")
 
 
-# ============================================================
-# STAGE 2: ENRICHMENT (LEVER)
-# ============================================================
 class LeverEnrichment:
-    """
-    Enrichment stage:
-    - supports job details template:
-      posting-headline categories: location/department/commitment/workplaceTypes
-      description: div.section.page-centered[data-qa="job-description"]
-    """
-
     def __init__(self, db_manager: SupabaseManager, concurrency=8):
         self.db = db_manager
         self.concurrency = concurrency
@@ -381,7 +329,6 @@ class LeverEnrichment:
             "date_opened": "",
         }
 
-        # 1) Description
         try:
             desc_el = page.locator('div.section.page-centered[data-qa="job-description"]')
             if await desc_el.count() > 0:
@@ -389,7 +336,6 @@ class LeverEnrichment:
         except:
             pass
 
-        # 2) Posting headline categories (NEW TEMPLATE)
         try:
             loc_el = page.locator("div.posting-headline div.posting-category.location")
             if await loc_el.count() > 0:
@@ -411,7 +357,6 @@ class LeverEnrichment:
         except:
             pass
 
-        # 3) Fallback old Lever blocks (keep)
         try:
             info_items = page.locator('ul.posting-requirements li, [data-qa="job-info"] li')
             count = await info_items.count()
@@ -433,7 +378,9 @@ class LeverEnrichment:
                         data["location"] = value
                     elif ("team" in label or "department" in label) and not data["team"]:
                         data["team"] = value
-                    elif ("employment" in label or "type" in label or "commitment" in label) and not data["employment_type"]:
+                    elif (
+                        "employment" in label or "type" in label or "commitment" in label
+                    ) and not data["employment_type"]:
                         data["employment_type"] = value
                     elif "experience" in label and not data["experience"]:
                         data["experience"] = value
@@ -456,7 +403,6 @@ class LeverEnrichment:
         try:
             await page.goto(url, timeout=45000, wait_until="domcontentloaded")
 
-            # Wait for description (best effort)
             try:
                 await page.wait_for_selector('div.section.page-centered[data-qa="job-description"]', timeout=8000)
             except:
@@ -464,10 +410,7 @@ class LeverEnrichment:
 
             scraped = await self._extract_details(page)
 
-            final_job_type = ScraperUtils.normalize_job_type(
-                scraped.get("employment_type") or job.get("job_type")
-            )
-
+            final_job_type = ScraperUtils.normalize_job_type(scraped.get("employment_type") or job.get("job_type"))
             final_location = scraped.get("location") or job.get("location") or None
             final_department = scraped.get("team") or job.get("department") or None
 
@@ -480,15 +423,14 @@ class LeverEnrichment:
                 "department": final_department,
             }
 
-            # Only update if description exists
             if payload["original_description"]:
                 return payload
 
-            print(f"⚠️ [ID {job_id}] No description found.")
+            print(f"No description found ID {job_id}")
             return None
 
         except Exception as e:
-            print(f"❌ [ID {job_id}] Failed: {str(e)[:80]}")
+            print(f"Failed ID {job_id}: {str(e)[:80]}")
             return None
 
     async def _worker(self, context, queue: asyncio.Queue, results: list):
@@ -529,7 +471,6 @@ class LeverEnrichment:
                 )
             )
 
-            # Block heavy resources
             async def block_resources(route):
                 if route.request.resource_type in ["image", "media", "font"]:
                     await route.abort()
@@ -542,15 +483,11 @@ class LeverEnrichment:
             for job in jobs:
                 queue.put_nowait(job)
 
-            # stop signals
             for _ in range(self.concurrency):
                 queue.put_nowait(None)
 
             results = []
-            workers = [
-                asyncio.create_task(self._worker(context, queue, results))
-                for _ in range(self.concurrency)
-            ]
+            workers = [asyncio.create_task(self._worker(context, queue, results)) for _ in range(self.concurrency)]
 
             await queue.join()
             await asyncio.gather(*workers)
@@ -560,23 +497,20 @@ class LeverEnrichment:
         self.db.bulk_update_jobs(results, batch_size=50)
 
         print(f"Stage 2 Runtime: {time.time() - start_time:.2f}s")
-        print("✅ Enrichment completed.")
+        print("Enrichment completed.")
         print("--- STAGE 2 COMPLETE ---")
 
     def run(self):
         asyncio.run(self.run_async())
 
 
-# ============================================================
-# FINAL EXPORT: Stage-1 + Stage-2 Combined CSV
-# ============================================================
 def export_lever_jobs_backup_from_db(db: SupabaseManager):
     print("\nExporting FINAL Lever jobs backup (Stage 1 + Stage 2 combined) to CSV...")
 
     try:
         res = db.client.table(JOBS_TABLE).select("* , scrapes_duplicate(ats_website(ats_name))").execute()
     except Exception as e:
-        print(f"❌ Error exporting jobs: {e}")
+        print(f"Error exporting jobs: {e}")
         return
 
     if not res.data:
@@ -585,40 +519,31 @@ def export_lever_jobs_backup_from_db(db: SupabaseManager):
 
     df = pd.DataFrame(res.data)
 
-    # Flatten ats_name
     if "scrapes_duplicate" in df.columns:
         df["ats_name"] = df["scrapes_duplicate"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
-    # Filter Lever only
     df = df[df["ats_name"].astype(str).str.lower().str.contains("lever", na=False)].copy()
 
-    # Drop nested json
     if "scrapes_duplicate" in df.columns:
         df.drop(columns=["scrapes_duplicate"], inplace=True)
 
     df.to_csv(FINAL_BACKUP_FILE, index=False)
-    print(f"✅ Final backup saved: {FINAL_BACKUP_FILE} ({len(df)} rows)")
+    print(f"Final backup saved: {FINAL_BACKUP_FILE} ({len(df)} rows)")
 
 
-# ============================================================
-# MAIN
-# ============================================================
 if __name__ == "__main__":
     start = time.time()
 
     db_manager = SupabaseManager()
 
-    # Stage 1
     discovery = LeverDiscovery(db_manager)
     discovery.run()
 
-    # Stage 2
     enrichment = LeverEnrichment(db_manager, concurrency=8)
     enrichment.run()
 
-    # ✅ Final CSV (Stage-1 + Stage-2 combined)
     export_lever_jobs_backup_from_db(db_manager)
 
     print(f"\nTotal Runtime: {time.time() - start:.2f}s")

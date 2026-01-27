@@ -7,15 +7,12 @@ import pandas as pd
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
-# Playwright
 from playwright.sync_api import sync_playwright
 from playwright.async_api import async_playwright
 
-# Database
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# ================= CONFIGURATION =================
 load_dotenv()
 
 SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
@@ -24,21 +21,15 @@ SUPABASE_KEY = "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa"
 SCRAPES_TABLE = "scrapes_duplicate"
 JOBS_TABLE = "jobs_duplicate"
 
-# Stage snapshots
 OUTPUT_JOBS_FILE = "freshteam_jobs_stage1.csv"
 OUTPUT_SCRAPES_FILE = "freshteam_scrapes_stage1.csv"
-
-# Final backup (Stage1 + Stage2)
 FINAL_BACKUP_FILE = "freshteam_jobs_backup.csv"
 
 INSERT_BATCH_SIZE = 100
 CHECK_BATCH_SIZE = 100
 
 
-# ================= UTILS CLASS =================
 class ScraperUtils:
-    """Static helper methods for text processing and DOM safety."""
-
     @staticmethod
     def clean_text(text: str) -> str:
         if not text:
@@ -48,7 +39,6 @@ class ScraperUtils:
 
     @staticmethod
     def remove_html_tags(text: str) -> str:
-        """Convert HTML description into plain text (keeps line breaks)."""
         if not text:
             return ""
         text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
@@ -73,7 +63,6 @@ class ScraperUtils:
 
     @staticmethod
     def normalize_job_type(text: str):
-        """Normalize job types into consistent format."""
         if not text:
             return None
 
@@ -90,26 +79,16 @@ class ScraperUtils:
             "freelance": "Freelance",
         }
 
-        # Freshteam JSON-LD can return: FULL_TIME / PART_TIME
         t = t.replace("_", " ").strip()
-
         return mapping.get(t, ScraperUtils.clean_text(text))
 
     @staticmethod
     def format_date_iso(date_str: str):
-        """
-        Converts date into ISO UTC string.
-        Supports:
-          - 2025-04-30
-          - 2025-04-30T10:20:30Z
-          - 30/04/2025
-        """
         if not date_str:
             return None
 
         s = ScraperUtils.clean_text(str(date_str))
 
-        # ISO already
         try:
             dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
             if not dt.tzinfo:
@@ -135,10 +114,7 @@ class ScraperUtils:
         return None
 
 
-# ================= DATABASE MANAGER =================
 class SupabaseManager:
-    """Handles all interactions with Supabase."""
-
     def __init__(self, url=SUPABASE_URL, key=SUPABASE_KEY):
         self.client: Client = create_client(url, key)
 
@@ -154,7 +130,6 @@ class SupabaseManager:
             return pd.DataFrame()
 
     def fetch_pending_jobs(self, ats_filter="Freshteam"):
-        """Fetches jobs from jobs_duplicate that need enrichment."""
         try:
             print(f"Fetching pending {ats_filter} jobs...")
             res = (
@@ -181,9 +156,9 @@ class SupabaseManager:
         try:
             print(f"Uploading {len(scrapes_data)} scrape records...")
             self.client.table(SCRAPES_TABLE).upsert(scrapes_data).execute()
-            print("✅ Scrape records uploaded.")
+            print("Scrape records uploaded.")
         except Exception as e:
-            print(f"❌ Error uploading scrapes: {e}")
+            print(f"Error uploading scrapes: {e}")
 
     def save_jobs_deduplicated(self, jobs_data):
         if not jobs_data:
@@ -204,41 +179,37 @@ class SupabaseManager:
                 for row in res.data:
                     existing_urls.add(row["job_url"])
             except Exception as e:
-                print(f"   ⚠️ Duplicate check error: {e}")
+                print(f"Duplicate check error: {e}")
 
         new_jobs = [j for j in unique_jobs_list if j["job_url"] not in existing_urls]
-        print(f"   -> Inserting {len(new_jobs)} new jobs ({len(unique_jobs_list) - len(new_jobs)} skipped).")
+        print(f"Inserting {len(new_jobs)} new jobs ({len(unique_jobs_list) - len(new_jobs)} skipped).")
 
         for i in range(0, len(new_jobs), INSERT_BATCH_SIZE):
             batch = new_jobs[i : i + INSERT_BATCH_SIZE]
             try:
                 self.client.table(JOBS_TABLE).insert(batch).execute()
-                print(f"   ↳ Uploaded batch {i}-{i+len(batch)}")
+                print(f"Uploaded batch {i}-{i+len(batch)}")
             except Exception as e:
-                print(f"   ❌ Error inserting batch: {e}")
+                print(f"Error inserting batch: {e}")
 
     def update_job(self, job_id, payload):
-        """Update a single job row safely."""
         try:
             clean_payload = {k: v for k, v in payload.items() if v is not None and v != ""}
             if clean_payload:
                 clean_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
                 self.client.table(JOBS_TABLE).update(clean_payload).eq("id", job_id).execute()
-                print(f"   ✅ [ID {job_id}] Updated")
+                print(f"[ID {job_id}] Updated")
         except Exception as e:
-            print(f"   ❌ [ID {job_id}] Update Failed: {e}")
+            print(f"[ID {job_id}] Update Failed: {e}")
 
 
-# ================= STAGE 1 (DISCOVERY) =================
 class FreshteamDiscovery:
-    """Class responsible for scraping Freshteam job lists."""
-
     def __init__(self, db_manager: SupabaseManager):
         self.db = db_manager
 
     def scrape_site(self, page, url, scrape_uuid):
         jobs_collected = []
-        print(f"   Scanning: {url}")
+        print(f"Scanning: {url}")
 
         try:
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
@@ -246,15 +217,15 @@ class FreshteamDiscovery:
             try:
                 page.wait_for_selector('xpath=//div[@data-portal-id="jobs_list"]', timeout=15000)
             except:
-                print("     ⚠️ No job list found (structure may have changed).")
+                print("No job list found.")
                 return []
 
             roles = page.locator('xpath=//li[@data-portal-role]')
             if roles.count() == 0:
-                print("     ⚠️ No job roles found.")
+                print("No job roles found.")
                 return []
 
-            print(f"     ↳ Found {roles.count()} job categories")
+            print(f"Found {roles.count()} job categories")
 
             for i in range(roles.count()):
                 role = roles.nth(i)
@@ -293,7 +264,6 @@ class FreshteamDiscovery:
                     now_iso = datetime.now(timezone.utc).isoformat()
 
                     jobs_collected.append({
-                        "id": uuid.uuid4().int % (2**63 - 1),
                         "created_at": now_iso,
                         "updated_at": now_iso,
                         "scrape_id": scrape_uuid,
@@ -308,7 +278,7 @@ class FreshteamDiscovery:
                     })
 
         except Exception as e:
-            print(f"     ❌ Error during scraping: {e}")
+            print(f"Error during scraping: {e}")
             return []
 
         return jobs_collected
@@ -347,7 +317,7 @@ class FreshteamDiscovery:
                     if jobs:
                         all_jobs.extend(jobs)
                 except Exception as e:
-                    print(f"   ❌ Failed: {e}")
+                    print(f"Failed: {e}")
                     scrape_record["status"] = "failed"
                     scrape_record["finished_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -355,14 +325,13 @@ class FreshteamDiscovery:
 
             browser.close()
 
-        # Save Stage-1 snapshot CSV
         if all_scrapes:
             pd.DataFrame(all_scrapes).to_csv(OUTPUT_SCRAPES_FILE, index=False)
-            print(f"✅ Stage-1 scrapes snapshot saved: {OUTPUT_SCRAPES_FILE}")
+            print(f"Stage-1 scrapes snapshot saved: {OUTPUT_SCRAPES_FILE}")
 
         if all_jobs:
             pd.DataFrame(all_jobs).to_csv(OUTPUT_JOBS_FILE, index=False)
-            print(f"✅ Stage-1 jobs snapshot saved: {OUTPUT_JOBS_FILE}")
+            print(f"Stage-1 jobs snapshot saved: {OUTPUT_JOBS_FILE}")
 
         clean_jobs = [j for j in all_jobs if j.get("job_url") and j["job_url"] != "NA"]
         self.db.save_scrapes(all_scrapes)
@@ -372,20 +341,12 @@ class FreshteamDiscovery:
         print("--- STAGE 1 COMPLETE ---")
 
 
-# ================= STAGE 2 (ENRICHMENT) =================
 class FreshteamEnrichment:
-    """Class responsible for enriching Freshteam job details."""
-
     def __init__(self, db_manager: SupabaseManager, concurrency=5):
         self.db = db_manager
         self.concurrency = concurrency
 
     async def _extract_details(self, page):
-        """
-        Extract:
-          - original_description (HTML visible)
-          - JSON-LD fallback: description, employmentType, jobLocation, datePosted
-        """
         data = {
             "original_description": None,
             "location": None,
@@ -394,7 +355,6 @@ class FreshteamEnrichment:
             "published_date": None,
         }
 
-        # 1) Visible description
         try:
             desc_el = page.locator(".job-details-content.content")
             if await desc_el.count() > 0:
@@ -402,7 +362,6 @@ class FreshteamEnrichment:
         except:
             pass
 
-        # 2) JSON-LD fallback
         try:
             scripts = page.locator('script[type="application/ld+json"]')
             count = await scripts.count()
@@ -419,20 +378,16 @@ class FreshteamEnrichment:
                     if not posting:
                         continue
 
-                    # Description fallback
                     if not data["original_description"]:
                         raw_desc = posting.get("description", "")
                         data["original_description"] = ScraperUtils.remove_html_tags(raw_desc)
 
-                    # Job type
                     if posting.get("employmentType"):
                         data["job_type"] = ScraperUtils.normalize_job_type(str(posting.get("employmentType")))
 
-                    # Published date
                     if posting.get("datePosted"):
                         data["published_date"] = ScraperUtils.format_date_iso(posting.get("datePosted"))
 
-                    # Location
                     job_loc = posting.get("jobLocation")
                     addr = None
 
@@ -453,7 +408,7 @@ class FreshteamEnrichment:
                     if loc_parts:
                         data["location"] = ", ".join(loc_parts)
 
-                    break  # Found valid JobPosting
+                    break
 
                 except:
                     continue
@@ -481,16 +436,16 @@ class FreshteamEnrichment:
                     "location": scraped["location"] or job.get("location"),
                     "job_type": scraped["job_type"] or job.get("job_type"),
                     "department": scraped["department"] or job.get("department"),
-                    "published_date": scraped["published_date"],  # can be None
+                    "published_date": scraped["published_date"],
                 }
 
                 if payload["original_description"]:
                     await asyncio.to_thread(self.db.update_job, job_id, payload)
                 else:
-                    print(f"   ⚠️ [ID {job_id}] No description found.")
+                    print(f"[ID {job_id}] No description found.")
 
             except Exception as e:
-                print(f"   ❌ [ID {job_id}] Failed: {str(e)[:80]}")
+                print(f"[ID {job_id}] Failed: {str(e)[:80]}")
             finally:
                 await page.close()
 
@@ -520,21 +475,20 @@ class FreshteamEnrichment:
 
             await browser.close()
 
-        print("✅ Enrichment completed.")
+        print("Enrichment completed.")
         print("--- STAGE 2 COMPLETE ---")
 
     def run(self):
         asyncio.run(self.run_async())
 
 
-# ================= FINAL EXPORT (Stage1 + Stage2) =================
 def export_freshteam_jobs_backup_from_db(db: SupabaseManager):
     print("\nExporting FINAL Freshteam jobs backup (Stage 1 + Stage 2 combined) to CSV...")
 
     try:
         res = db.client.table(JOBS_TABLE).select("* , scrapes_duplicate(ats_website(ats_name))").execute()
     except Exception as e:
-        print(f"❌ Error exporting jobs: {e}")
+        print(f"Error exporting jobs: {e}")
         return
 
     if not res.data:
@@ -543,38 +497,31 @@ def export_freshteam_jobs_backup_from_db(db: SupabaseManager):
 
     df = pd.DataFrame(res.data)
 
-    # Flatten ats_name
     if "scrapes_duplicate" in df.columns:
         df["ats_name"] = df["scrapes_duplicate"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
-    # Filter Freshteam only
     df = df[df["ats_name"].astype(str).str.lower().str.contains("freshteam", na=False)].copy()
 
-    # Drop nested json
     if "scrapes_duplicate" in df.columns:
         df.drop(columns=["scrapes_duplicate"], inplace=True)
 
     df.to_csv(FINAL_BACKUP_FILE, index=False)
-    print(f"✅ Final backup saved: {FINAL_BACKUP_FILE} ({len(df)} rows)")
+    print(f"Final backup saved: {FINAL_BACKUP_FILE} ({len(df)} rows)")
 
 
-# ================= MAIN EXECUTION =================
 if __name__ == "__main__":
     start = time.time()
 
     db_manager = SupabaseManager()
 
-    # Stage 1: Discovery
     discovery = FreshteamDiscovery(db_manager)
     discovery.run()
 
-    # Stage 2: Enrichment
     enrichment = FreshteamEnrichment(db_manager, concurrency=5)
     enrichment.run()
 
-    # ✅ Final CSV (Stage-1 + Stage-2 combined)
     export_freshteam_jobs_backup_from_db(db_manager)
 
     print(f"\nTotal Runtime: {time.time() - start:.2f}s")
