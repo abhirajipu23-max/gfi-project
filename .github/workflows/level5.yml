@@ -1,8 +1,8 @@
-name: Running level 5 
+name: Running level 5
 
 on:
   schedule:
-    - cron: "0 20 * * *"
+    - cron: "30 20 * * *"   # 2:00 AM IST
   workflow_dispatch:
 
 jobs:
