@@ -1,0 +1,33 @@
+name: Running level 3
+
+on:
+  schedule:
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    env:
+      API_KEY1: ${{ secrets.API_KEY1 }}
+      API_KEY2: ${{ secrets.API_KEY2 }}
+      API_KEY3: ${{ secrets.API_KEY3 }}
+      API_KEY4: ${{ secrets.API_KEY4 }}
+      API_KEY5: ${{ secrets.API_KEY5 }}
+      API_KEY6: ${{ secrets.API_KEY6 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps
+
+      - name: Run script
+        run: python level5/level5.py
