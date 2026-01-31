@@ -2,7 +2,7 @@ name: Running Darwinbox URLs
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 20 * * *"
   workflow_dispatch:
 
 jobs:
@@ -21,4 +21,3 @@ jobs:
           playwright install --with-deps
 
       - run: python "level4/darwinbox_git.py"
-
