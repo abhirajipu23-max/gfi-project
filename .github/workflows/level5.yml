@@ -2,7 +2,7 @@ name: Running level 5
 
 on:
   schedule:
-    - cron: "30 22 * * *"   # 2:00 AM IST
+    - cron: "30 22 * * *"   # 04:00 AM IST
   workflow_dispatch:
 
 jobs:
@@ -10,12 +10,12 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      API_KEY1: ${{ secrets.API_KEY1 }}
-      API_KEY2: ${{ secrets.API_KEY2 }}
-      API_KEY3: ${{ secrets.API_KEY3 }}
-      API_KEY4: ${{ secrets.API_KEY4 }}
-      API_KEY5: ${{ secrets.API_KEY5 }}
-      API_KEY6: ${{ secrets.API_KEY6 }}
+      API_KEY1: ${{ vars.API_KEY1 }}
+      API_KEY2: ${{ vars.API_KEY2 }}
+      API_KEY3: ${{ vars.API_KEY3 }}
+      API_KEY4: ${{ vars.API_KEY4 }}
+      API_KEY5: ${{ vars.API_KEY5 }}
+      API_KEY6: ${{ vars.API_KEY6 }}
 
     steps:
       - uses: actions/checkout@v4
