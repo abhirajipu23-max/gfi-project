@@ -8,23 +8,19 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-    environment: production   # 👈 REQUIRED
 
     env:
-      API_KEY1: ${{ vars.API_KEY1 }}
-      API_KEY2: ${{ vars.API_KEY2 }}
-      API_KEY3: ${{ vars.API_KEY3 }}
-      API_KEY4: ${{ vars.API_KEY4 }}
-      API_KEY5: ${{ vars.API_KEY5 }}
-      API_KEY6: ${{ vars.API_KEY6 }}
-      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      API_KEY1: ${{ secrets.API_KEY1 }}
+      API_KEY2: ${{ secrets.API_KEY2 }}
+      API_KEY3: ${{ secrets.API_KEY3 }}
+      API_KEY4: ${{ secrets.API_KEY4 }}
+      API_KEY5: ${{ secrets.API_KEY5 }}
+      API_KEY6: ${{ secrets.API_KEY6 }}
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
@@ -34,5 +30,5 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps
 
-      - name: Run level 5 script
+      - name: Run script
         run: python level5/level5.py
