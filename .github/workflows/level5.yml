@@ -8,7 +8,7 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-    environment: production
+    environment: api_key
 
     env:
       API_KEY1: ${{ secrets.API_KEY1 }}
