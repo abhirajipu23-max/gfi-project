@@ -33,8 +33,8 @@ GROQ_API_KEYS = [
 GROQ_API_KEYS = [k for k in GROQ_API_KEYS if k]
 
 GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant"
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile"
 ]
 
 current_key_index = 0
