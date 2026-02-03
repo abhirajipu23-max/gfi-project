@@ -17,9 +17,6 @@ jobs:
       API_KEY4: ${{ secrets.API_KEY4 }}
       API_KEY5: ${{ secrets.API_KEY5 }}
       API_KEY6: ${{ secrets.API_KEY6 }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-
     steps:
       - uses: actions/checkout@v4
 
