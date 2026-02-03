@@ -8,15 +8,17 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-    environment: production   # 👈 REQUIRED
+    environment: production
 
     env:
-      API_KEY1: ${{ vars.API_KEY1 }}
-      API_KEY2: ${{ vars.API_KEY2 }}
-      API_KEY3: ${{ vars.API_KEY3 }}
-      API_KEY4: ${{ vars.API_KEY4 }}
-      API_KEY5: ${{ vars.API_KEY5 }}
-      API_KEY6: ${{ vars.API_KEY6 }}
+      API_KEY1: ${{ secrets.API_KEY1 }}
+      API_KEY2: ${{ secrets.API_KEY2 }}
+      API_KEY3: ${{ secrets.API_KEY3 }}
+      API_KEY4: ${{ secrets.API_KEY4 }}
+      API_KEY5: ${{ secrets.API_KEY5 }}
+      API_KEY6: ${{ secrets.API_KEY6 }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
 
     steps:
       - uses: actions/checkout@v4
