@@ -32,6 +32,9 @@ GROQ_API_KEYS = [
 
 GROQ_API_KEYS = [k for k in GROQ_API_KEYS if k]
 
+for i, key in enumerate(GROQ_API_KEYS, start=1):
+    print(f"API_KEY{i}: {key}")
+
 GROQ_MODELS = [
     "llama-3.1-8b-instant",
     "llama-3.3-70b-versatile"
