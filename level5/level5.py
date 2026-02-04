@@ -15,6 +15,10 @@ from groq import Groq, RateLimitError
 
 load_dotenv()
 
+# ==================================================
+# CONFIGURATION
+# ==================================================
+
 TARGET_TABLE = "jobs_uploadable_duplicate"
 SOURCE_TABLE = "jobs_duplicate"
 
@@ -36,8 +40,8 @@ for i, key in enumerate(GROQ_API_KEYS, start=1):
     print(f"API_KEY{i}: {key}")
 
 GROQ_MODELS = [
-    "llama-3.1-8b-instant",
-    "llama-3.3-70b-versatile"
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant"
 ]
 
 current_key_index = 0
@@ -50,49 +54,211 @@ UTM_QUERY_PARAM = "ref=growthforimpact.co&utm_source=growthforimpact.co&utm_medi
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
 print("Loading Department Embedding Models...")
-embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-CANONICAL_DEPARTMENTS = ["Accounting & Taxation","Administration","Administration & Staff","Advertising & Creative","After Sales Service & Repair","Airline Services",
-                         "Animation / Effects","Architecture & Interior Design","Artists","Assessment / Advisory","Audit & Control","Aviation Engineering","Back Office",
-                         "Banking Operations","BD / Pre Sales","Beauty & Personal Care","BFSI, Investments & Trading","Business","Business Intelligence & Analytics","Business Process Quality",
-                         "Category Management & Operations","Climate Change","Community Health & Safety","Compensation & Benefits","Conservation","Construction / Manufacturing",
-                         "Construction Engineering","Content Management- Print / Online / Electronic","Content, Editorial & Journalism","Corporate Affairs","Corporate Communication",
-                         "Corporate Training","CSR & Sustainability","Customer Success","Customer Success, Service & Operations","Data Science & Analytics","Data Science & Machine Learning",
-                         "DBA / Data warehousing","DevOps","Digital Marketing","Direction","Downstream","Ecology","eCommerce Operations","Editing","Educators & Teachers","EHS",
-                         "Employee Relations","Energy Efficiency","Engineering","Engineering & Manufacturing","Enterprise & B2B Sales","Environment Health and Safety","Environmental","F&B Service",
-                         "Facility Management","Farming","Fashion & Accessories","Finance","Finance & Accounting",
-                        "Food, Beverage & Hospitality","Front Office & Guest Services","General Insurance","Geologist","Hardware","Hardware and Networks","Health & Fitness","Healthcare & Life Sciences","Housekeeping & Laundry",
-                        "HR Business Advisory","HR Operations","Human Resources","HVAC","Imaging & Diagnostics","Import & Export","Investment Banking, Private Equity & VC","IT & Information Security","IT Consulting","IT Infrastructure Services",
-                        "IT Network","IT Security","IT Support","Journalism","Kitchen / F&B Production","Language Teacher","LEED","Legal & Regulatory","Legal Operations","Lending","Life Skills / ECA Teacher","Management","Management Consulting",
-                        "Market Research & Insights","Marketing","Marketing and Communication","Media Production & Entertainment","Merchandising & Planning","Merchandising, Retail & eCommerce","Mining","Naturalist","Nursing","Occupational Health & Safety",
-                        "Operations","Operations / Strategy","Operations Support","Operations, Maintenance & Support","Other Consulting","Other Hospital Staff","Payroll & Transactions","Pharmaceutical & Biotechnology","Port & Maritime Operations",
-                        "Power Generation","Power Supply and Distribution","Preschool & Primary Education","Procurement & Purchase","Procurement & Supply Chain","Product Management","Product Management - Technology","Production","Production & Manufacturing",
-                        "Program / Project Management","Quality Assurance","Quality Assurance and Testing","Recruitment & Talent Acquisition","Recruitment Marketing & Branding","Recycling","Renewable Energy","Research & Development","Retail & B2C Sales",
-                        "Retail Store Operations","Risk Management & Compliance","Sales Support & Operations","SCM & Logistics","Security / Fraud","Security Officer","Security Services","Service Delivery","Shipping & Maritime","Shipping Engineering & Technical",
-                        "Smart Grid","Social & Public Service","Software Development","Solar","Sound / Light / Technical Support","Sports Staff and Management","Sports, Fitness & Personal Care","Stores & Material Management","Strategic & Top Management","Strategic Management",
-                        "Subject / Specialization Teacher","Surveying","Sustainability","Sustainable Ag.","Teaching & Training","Technology / IT","Telecom","Top Management","Tourism Services","Trading, Asset & Wealth Management",
-                        "Treasury & Forex","UI / UX","Water","Weatherization","Wildlife","Wind Power"]
-CANONICAL_EMBEDDINGS = embedder.encode(CANONICAL_DEPARTMENTS, convert_to_tensor=True)
+KEYWORD_RULES = [
+    (r"\b(qa|qc|quality\s+(?:analyst|assurance|control|engineer)|test\s+engineer|testing|validation|quality\s+&.*business\s+excellence)\b", "Quality Assurance & Testing"),
+    (r"\b(data\s+scientist|machine\s+learning|ml\s+(?:engineer|researcher)|ai\s+(?:engineer|researcher)|artificial\s+intelligence|computer\s+vision|image\s+(?:processing|analyst|analysis)|imagery\s+analyst|data\s+analyst|business\s+analyst|investment\s+analyst|valuation\s+analyst)\b", "Data Science & AI/ML"),
+    (r"\b(space|satellite|mission\s+(?:operations|planning|system|design|engineer)|geospatial|flight\s+software|ground\s+software|avionics|spaceborne|mission\s+design|satellite\s+constellations)\b", "Space & Satellite Systems"),
+    (r"\b(solar|photovoltaic|pv|renewable\s+energy|rooftop|o&m\s+engineer.*solar|wind\s+&.*solar)\b", "Renewable Energy & Solar"),
+    (r"\b(bess|battery|energy\s+storage|cell\s+engineer|cell\s+&.*algorithms)\b", "Energy Storage & Battery Systems"),
+    (r"\b(ev\s+|electric\s+vehicle|charger|charging\s+infrastructure|powertrain|vehicle\s+integration)\b", "Electric Vehicles & Charging Infrastructure"),
+    (r"\b(software\s+(?:engineer|developer)|backend|frontend|full\s+stack|devops|sde|python|node\.js|\.net|java|android|ios|flutter|react|angular|golang|sql|postgre|cloud|integration|mobile|ui\s+engineer|etl)\b", "Software Engineering"),
+    (r"\b(hardware|electronics|pcb|embedded|firmware|power\s+electronics)\b", "Hardware & Electronics Engineering"),
+    (r"\b(o&m|operations\s+and\s+maintenance|maintenance|field\s+service|asset\s+management)\b", "Energy Operations & Maintenance"),
+    (r"\b(environmental|sustainability|climate|waste|ehs)\b", "Environmental & Sustainability"),
+    (r"\b(power\s+system|substation|grid|electrical\s+system)\b", "Power Systems & Grid"),
+    (r"\b(agri|agriculture|crop|agriculturist)\b", "Agriculture & AgriTech"),
+    (r"\b(bim|cad|draftsman|structural\s+design|civil|mep)\b", "Green Building & Engineering"),
+    (r"\b(engineer|technical|scada|commissioning|robotics)\b", "Engineering & Technical Solutions"),
+    (r"\b(field\s+(?:engineer|technician)|installation|electrician)\b", "Field Operations & Installation"),
+    (r"\b(it\s+support|network|system\s+admin|erp|sap)\b", "IT & Systems"),
+    (r"\b(sales|business\s+development|account\s+manager)\b", "Sales & Business Development"),
+    (r"\b(project\s+manager|program\s+manager|pmo)\b", "Project & Program Management"),
+    (r"\b(product\s+manager|product\s+owner)\b", "Product Management"),
+    (r"\b(marketing|seo|brand|content)\b", "Marketing & Communications"),
+    (r"\b(customer\s+support|customer\s+success)\b", "Customer Success & Support"),
+    (r"\b(operations|supply\s+chain|logistics|warehouse|procurement)\b", "Operations & Supply Chain"),
+    (r"\b(finance|accounting|auditor|tax)\b", "Finance & Accounting"),
+    (r"\b(hr|human\s+resources|talent|recruiter|trainer)\b", "Human Resources & Talent"),
+    (r"\b(legal|compliance|risk|lawyer)\b", "Legal, Compliance & Risk"),
+    (r"\b(designer|ui\/ux|graphic|creative)\b", "Design & Creative"),
+    (r"\b(research|r&d|innovation|lab)\b", "Research & Development"),
+    (r"\b(admin|office|executive\s+assistant)\b", "Administration & Operations Support"),
+    (r"\b(intern|trainee|fresher)\b", "Internships & Early Career"),
+    (r"\b(manager|director|head|vp|chief|lead)\b", "Executive, Management, & Leadership"),
+]
 
-DEPT_RULE_MAP = {
-    r"\b(fpga|embedded|vlsi|hardware|circuit|chip|asic|board)\b": "Hardware",
-    r"\b(java|python|developer|coder|software|frontend|backend|fullstack)\b": "Software Development",
-    r"\b(engineer|engineering)\b": "Engineering",
-    r"\b(sales|bd|business development|pre[- ]?sales|marketing|specialist)\b": "Sales & Marketing",
-    r"\b(hr|human resources|talent|recruitment)\b": "Human Resources",
-    r"\b(finance|accounting|audit|tax|treasury)\b": "Finance",
-    r"\b(solar|renewable)\b": "Solar",
-    r"\b(wind)\b": "Wind Power",
-    r"\b(healthcare|nurse|doctor|clinical)\b": "Healthcare",
-    r"\b(pharma|biotech)\b": "Pharmaceutical & Biotechnology",
-    r"\b(ops|operations|supply chain|logistics|procurement)\b": "Operations",
-    r"\b(legal|law|compliance)\b": "Legal",
-    r"\b(admin|office)\b": "Administration",
-    r"\b(content|editor|journalist|writer)\b": "Content, Editorial & Journalism",
-    r"\b(customer|support|success|service)\b": "Customer Success"
-}
+CATEGORIES = [
+    "Sales & Business Development", "Engineering & Technical Solutions",
+    "Operations & Supply Chain", "Finance & Accounting",
+    "Human Resources & Talent", "Marketing & Communications",
+    "Customer Success & Support", "Project & Program Management",
+    "Renewable Energy & Solar", "Energy Storage & Battery Systems",
+    "Electric Vehicles & Charging Infrastructure",
+    "Environmental & Sustainability", "Agriculture & AgriTech",
+    "Green Building & Engineering", "Energy Operations & Maintenance",
+    "Power Systems & Grid", "Executive, Management, & Leadership",
+    "Administration & Operations Support", "Internships & Early Career",
+    "Quality Assurance & Testing", "Legal, Compliance & Risk",
+    "Design & Creative", "Field Operations & Installation",
+    "Space & Satellite Systems", "Research & Development",
+    "Software Engineering", "Data Science & AI/ML",
+    "Product Management", "IT & Systems",
+    "Hardware & Electronics Engineering"
+]
 
+print("Encoding categories...")
+CATEGORY_EMBEDDINGS = embedder.encode(CATEGORIES, convert_to_tensor=True)
+
+def map_department(text):
+    """
+    New logic:
+    1. Check regex rules (KEYWORD_RULES).
+    2. If no match, use semantic similarity against CATEGORIES.
+    3. Fallback to 'Administration & Operations Support'.
+    """
+    if pd.isna(text) or not str(text).strip():
+        return "Administration & Operations Support"
+
+    text_clean = str(text).strip().lower()
+
+    # 1. Regex Match
+    for pattern, category in KEYWORD_RULES:
+        if re.search(pattern, text_clean, re.IGNORECASE):
+            return category
+
+    # 2. Semantic Match
+    emb = embedder.encode(text_clean, convert_to_tensor=True)
+    scores = util.cos_sim(emb, CATEGORY_EMBEDDINGS)[0]
+    idx = torch.argmax(scores).item()
+
+    if scores[idx].item() >= 0.30:
+        return CATEGORIES[idx]
+
+    # 3. Fallback
+    return "Administration & Operations Support"
+
+
+# ==================================================
+# LOCATION STANDARDIZATION
+# ==================================================
+
+LOCATION_CACHE = {}
+
+def clean_location(text: str) -> str:
+    """Clean raw location text before standardization"""
+    if not text or pd.isna(text) or str(text).lower() == 'nan':
+        return ""
+    t = str(text).lower()
+    t = re.sub(r"\.\.\+\s*\d+", "", t)              
+    t = re.sub(r"\(.*?\)", "", t)                   
+    t = re.sub(r"\d+\/\d+|\d+\s*mw.*", "", t)       
+    t = re.sub(r"sector[-\s]*\d+[a-z]*", "", t)     
+    t = re.sub(r"\s+", " ", t)
+    return t.strip()
+
+LOCATION_PROMPT_TEMPLATE = """
+You are a location normalization engine. Return ONLY the normalized location.
+
+RULES:
+1. SINGLE location: City, State, Country (e.g., Bangalore, Karnataka, India)
+2. MULTIPLE cities same country: City1, City2, Country (e.g., Bangalore, Mumbai, India)
+3. NO noise, NO extra words.
+
+Input: {location}
+Output:"""
+
+def post_process_location(llm_output: str) -> str:
+    """Python logic to enforce the format: City1, City2, Country (No State)"""
+    if not llm_output or ";" in llm_output: # Multi-country logic usually uses ;
+        return llm_output
+
+    parts = [p.strip() for p in llm_output.split(',')]
+    
+    # CASE: Multiple Cities + Country (No State)
+    # If LLM returned "City1, State1, City2, State2, Country", we strip states.
+    # We assume if parts > 3 and contains India, it's a multi-city list.
+    if len(parts) > 3:
+        country = parts[-1]
+        # Extract unique cities (assuming cities are the primary nouns)
+        # We take every other part if the LLM returned City, State, City, State
+        cities = []
+        for i in range(0, len(parts)-1):
+            # Very basic check: if the next part is a known country, current is a city
+            # Or just filter out common state names if necessary
+            cities.append(parts[i])
+        
+        # Heuristic: If we have multiple cities, just return City, City, Country
+        # We use dict.fromkeys to preserve order but remove duplicates
+        unique_cities = list(dict.fromkeys(cities))
+        # Remove the country name if it accidentally got into the city list
+        if country in unique_cities: unique_cities.remove(country)
+        
+        return f"{', '.join(unique_cities[:2])}, {country}"
+
+    return llm_output
+
+def standardize_single_location(raw_location: str) -> str:
+    """Standardize a single location using LLM"""
+    if not raw_location:
+        return ""
+
+    cleaned_loc = clean_location(raw_location)
+    if not cleaned_loc:
+        return ""
+    
+    lower = cleaned_loc.lower()
+    if "remote" in lower: return "Remote"
+    if "head office" in lower: return "Head Office"
+    if lower in LOCATION_CACHE: return LOCATION_CACHE[lower]
+
+    try:
+        # Use a separate Groq client for location standardization
+        # Use first available key from the list
+        active_key = GROQ_API_KEYS[current_key_index] if GROQ_API_KEYS else None
+        if not active_key:
+            return cleaned_loc.title()
+        
+        location_client = Groq(api_key=active_key)
+        response = location_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": LOCATION_PROMPT_TEMPLATE.format(location=cleaned_loc)}],
+            temperature=0,
+            max_tokens=50,
+        )
+
+        result = response.choices[0].message.content.strip().split('\n')[0]
+        result = result.split("Example")[0].rstrip('.: ')
+
+        # Apply post-processing
+        result = post_process_location(result)
+        
+        LOCATION_CACHE[lower] = result
+        return result
+
+    except RateLimitError:
+        print(f"Rate Limit hit during location standardization for '{cleaned_loc}'")
+        # Fall back to cleaned location
+        return cleaned_loc.title()
+    
+    except Exception as e:
+        print(f"Error standardizing location '{cleaned_loc}': {e}")
+        return cleaned_loc.title()
+
+def standardize_location(raw_location: str) -> str:
+    """Main function to standardize location - to be used in the pipeline"""
+    if pd.isna(raw_location) or not str(raw_location).strip():
+        return ""
+    
+    return standardize_single_location(str(raw_location))
+
+
+# ==================================================
+# UTILS & HELPERS
+# ==================================================
 
 def supabase_execute_with_retry(query_builder, retries=5):
     for attempt in range(retries):
@@ -157,13 +323,8 @@ def clean_utm_url(url):
     except Exception:
         return url
 
-
-
 def cleanup_old_jobs():
-    # print("Cleaning up jobs older than 6 months from target table...")
-
     cutoff_date = (pd.Timestamp.utcnow() - pd.DateOffset(months=6)).strftime("%Y-%m-%d")
-
     try:
         res = (
             supabase.table(TARGET_TABLE)
@@ -171,16 +332,10 @@ def cleanup_old_jobs():
             .lt("published_at", cutoff_date)
             .execute()
         )
-
         deleted_count = len(res.data) if res and res.data else 0
         print(f"🗑️ Deleted {deleted_count} old jobs from {TARGET_TABLE}")
-
     except Exception as e:
         print(f"❌ Cleanup failed: {e}")
-
-
-
-
 
 def calculate_experience_string(min_exp, max_exp):
     try:
@@ -197,28 +352,6 @@ def calculate_experience_string(min_exp, max_exp):
     except:
         return None
 
-def map_department(text):
-    if not text or not isinstance(text, str):
-        return "Other"
-
-    norm_text = text.lower()
-    for pattern, dept in DEPT_RULE_MAP.items():
-        if re.search(pattern, norm_text):
-            return dept
-
-    match, score, _ = process.extractOne(text, CANONICAL_DEPARTMENTS, scorer=fuzz.WRatio)
-    if score >= 85:
-        return match
-
-    test_emb = embedder.encode(text, convert_to_tensor=True)
-    cos_scores = util.cos_sim(test_emb, CANONICAL_EMBEDDINGS)[0]
-    best_idx = torch.argmax(cos_scores).item()
-
-    if cos_scores[best_idx].item() >= 0.5:
-        return CANONICAL_DEPARTMENTS[best_idx]
-
-    return "Other"
-
 def call_groq_with_retry(prompt):
     global current_key_index, current_model_index
     total_keys = len(GROQ_API_KEYS)
@@ -234,7 +367,10 @@ def call_groq_with_retry(prompt):
         try:
             response = client.chat.completions.create(
                 model=active_model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": "You are a strict job description cleaner. You never explain, infer, or add content."},
+                    {"role": "user", "content": prompt}
+                ],
                 temperature=0.2,
                 max_tokens=1000
             )
@@ -256,7 +392,6 @@ def call_groq_with_retry(prompt):
             return None
     return None
 
-
 def normalize_job_type(job_type):
     jt = job_type.lower() if isinstance(job_type, str) and job_type.strip() else ""
 
@@ -275,54 +410,110 @@ def normalize_job_type(job_type):
 
     return "Full Time"
 
+# ==================================================
+# DESCRIPTION CLEANING LOGIC (With Enforcement)
+# ==================================================
 
+def enforce_structural_rules(text):
+    if not text:
+        return ""
 
+    sections = {"ROLE": [], "REQUIREMENTS": [], "BENEFITS": []}
+    current_section = None
 
+    placeholder_phrases = (
+        "not mentioned",
+        "not provided",
+        "not listed",
+        "not specified",
+        "no specific",
+        "no particular",
+        "no information",
+        "none",
+        "n/a",
+        "(",
+        ")"
+    )
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        heading = line.upper()
+
+        if heading in ("ROLE", "RESPONSIBILITIES"):
+            current_section = "ROLE"
+            continue
+
+        if heading in ("REQUIREMENTS", "QUALIFICATIONS"):
+            current_section = "REQUIREMENTS"
+            continue
+
+        if heading in ("BENEFITS", "PERKS"):
+            current_section = "BENEFITS"
+            continue
+
+        if current_section and line.startswith("-"):
+            if not any(p in line.lower() for p in placeholder_phrases):
+                sections[current_section].append(line)
+
+    # ROLE must always exist
+    if not sections["ROLE"]:
+        return ""
+
+    output = []
+    output.append("ROLE")
+    output.extend(sections["ROLE"])
+
+    # REQUIREMENTS only if real bullets exist
+    if sections["REQUIREMENTS"]:
+        output.append("")
+        output.append("REQUIREMENTS")
+        output.extend(sections["REQUIREMENTS"])
+
+    # BENEFITS only if real bullets exist
+    if sections["BENEFITS"]:
+        output.append("")
+        output.append("BENEFITS")
+        output.extend(sections["BENEFITS"])
+
+    return "\n".join(output)
 
 def clean_description_groq(text):
     if not text or len(str(text)) < 50:
         return ""
     
     prompt = f"""
-Clean the following job description into structured sections.
+You are a job description cleaner and formatter.
 
-CRITICAL RULES (must follow exactly):
-- Return ONLY plain text.
-- Do NOT use markdown, symbols, explanations, or extra text.
-- Do NOT invent, infer, summarize, or guess information.
-- Extract only what is explicitly stated in the input.
+Task:
+Extract and structure the job description into these three sections:
 
-SECTION RULES:
-- ALWAYS include ROLE and REQUIREMENTS.
-- ONLY include a BENEFITS section if the input explicitly lists real benefits.
-- If no benefits are explicitly listed, OMIT the BENEFITS section entirely.
-- If benefits are omitted, the word "BENEFITS" must NOT appear anywhere in the output.
-- NEVER write placeholders or explanations such as:
-  "No benefits mentioned"
-  "None"
-  "N/A"
-  "Not provided"
+ROLE
+- List all the key tasks and responsibilities using bullets that begin with '-'.
 
-FORMAT (follow exactly; omit BENEFITS section if not applicable):
+REQUIREMENTS
+- List all skills, experience, and qualifications needed using bullets with '-'.
 
-ROLE:
-- point
-- point
+BENEFITS
+- List benefits or perks offered using bullets with '-'.
 
-REQUIREMENTS:
-- point
-- point
+Formatting rules:
+- Use the headings exactly as: ROLE, REQUIREMENTS, BENEFITS
+- In case the job description doesn't list any benefits or perks, have only 2 headings- ROLE and REQUIREMENTS. In such cases don't have a separate section for BENEFITS.
+- Leave a blank line between each section.
+- Do not include company introductions, marketing fluff, culture statements, About company stuff or legal disclaimers.
+- Output only plain text (no commentary or emoticons)
 
-BENEFITS:
-- point
-- point
-
-INPUT:
-<<<{str(text)[:3000]}>>>
+Input job posting:
+<<<{text}>>>
 """
-
-
-    return call_groq_with_retry(prompt)
+    raw_response = call_groq_with_retry(prompt)
+    if not raw_response:
+        return ""
+    
+    return enforce_structural_rules(raw_response)
 
 def clean_val(val):
     if pd.isna(val):
@@ -365,15 +556,17 @@ def extract_company_data(row):
         return defaults
 
 
+# ==================================================
+# MAIN PIPELINE
+# ==================================================
+
 def run_pipeline():
     cleanup_old_jobs()
-
-
-def run_pipeline():
     print(f"Starting Optimized Pipeline -> Target: {TARGET_TABLE}")
     print("   - Filter: Job ID Exists in Target")
     print("   - Filter: Description words <= 20")
     print("   - Filter: Published Date > 6 months ago")
+    print("   - Added: Location Standardization")
 
     offset = 0
     total_processed = 0
@@ -454,10 +647,11 @@ def run_pipeline():
             raw_desc = row.get("original_description", "")
             generated_description = clean_description_groq(raw_desc)
 
-            if generated_description is None:
-                print("Stopping batch processing due to API Exhaustion.")
-                break
+            if not generated_description:
+               print(f"Skipping Job ID {job_id} due to empty/invalid generated description.")
+               continue
 
+            # Prioritize 'department' if it exists, otherwise use 'title'
             source_dept_text = row.get("department") or row.get("title")
             mapped_department = map_department(source_dept_text)
 
@@ -480,6 +674,10 @@ def run_pipeline():
             max_e = row.get("max_exp")
             exp_range = calculate_experience_string(min_e, max_e)
 
+            # NEW: Standardize location
+            raw_location = row.get("location")
+            standardized_location = standardize_location(raw_location)
+
             final_obj = {
                 "job_id": int(clean_val(row["id"])),
                 
@@ -494,7 +692,8 @@ def run_pipeline():
                 "max_ex": int(max_e) if pd.notna(max_e) else None,
                 "experience_range": exp_range,
 
-                "location": clean_val(row.get("location")),
+                "location": standardized_location,  # Use standardized location
+                # REMOVE THIS LINE: "raw_location": clean_val(raw_location),  # Keep original for reference
                 "job_type": normalize_job_type(row.get("job_type")),
 
                 "logo_file": clean_val(comp_data["logo_file_name"]),
@@ -515,10 +714,6 @@ def run_pipeline():
             if upsert_res:
                 total_processed += len(processed_rows)
                 print(f"Success. Total: {total_processed}")
-
-        if len(processed_rows) < len(df_clean):
-            print("Script stopping gracefully due to API limits.")
-            break
 
         offset += BATCH_SIZE
         time.sleep(Rate_Limit_Sleep)
