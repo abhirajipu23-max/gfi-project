@@ -612,7 +612,7 @@ def run_pipeline():
         df["word_count"] = df["original_description"].apply(
             lambda x: len(str(x).split()) if pd.notna(x) else 0
         )
-        mask_long_desc = df["word_count"] > 20
+        mask_long_desc = df["word_count"] > 50
 
         df["published_date_dt"] = pd.to_datetime(
             df["published_date"], errors="coerce", utc=True
