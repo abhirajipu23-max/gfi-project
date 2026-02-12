@@ -150,9 +150,43 @@ def save_to_supabase(scrapes_data, jobs_data):
             print(f"Error checking duplicates (Batch {i}): {e}")
 
     new_jobs = [j for j in unique_jobs_list if j["job_url"] not in existing_urls]
-
+    
+    # For existing jobs, check if we need to update them with better data
+    existing_jobs_to_update = [j for j in unique_jobs_list if j["job_url"] in existing_urls and 
+                              (j.get("location") or j.get("min_exp") is not None or j.get("job_type"))]
+    
     print(f"Skipped {len(unique_jobs_list) - len(new_jobs)} existing jobs.")
+    print(f"Found {len(existing_jobs_to_update)} existing jobs that need updates.")
     print(f"Inserting {len(new_jobs)} new jobs...")
+
+    # Update existing jobs with better data if available
+    if existing_jobs_to_update:
+        for job in existing_jobs_to_update:
+            try:
+                # Fetch current job data
+                current = supabase.table(JOBS_TABLE).select("*").eq("job_url", job["job_url"]).execute()
+                if current.data:
+                    current_job = current.data[0]
+                    update_payload = {}
+                    
+                    # Only update if current value is None/empty and new value exists
+                    if not current_job.get("location") and job.get("location"):
+                        update_payload["location"] = job["location"]
+                    if current_job.get("min_exp") is None and job.get("min_exp") is not None:
+                        update_payload["min_exp"] = job["min_exp"]
+                    if current_job.get("max_exp") is None and job.get("max_exp") is not None:
+                        update_payload["max_exp"] = job["max_exp"]
+                    if not current_job.get("job_type") and job.get("job_type"):
+                        update_payload["job_type"] = job["job_type"]
+                    if not current_job.get("published_date") and job.get("published_date"):
+                        update_payload["published_date"] = job["published_date"]
+                    
+                    if update_payload:
+                        update_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+                        supabase.table(JOBS_TABLE).update(update_payload).eq("id", current_job["id"]).execute()
+                        print(f"Updated existing job: {job['job_url'][-40:]}")
+            except Exception as e:
+                print(f"Error updating existing job: {e}")
 
     if not new_jobs:
         print("No new jobs to insert.")
@@ -167,6 +201,71 @@ def save_to_supabase(scrapes_data, jobs_data):
             print(f"Error uploading batch: {e}")
 
 
+def extract_job_card_details(card):
+    """Extract all job details from a job card"""
+    
+    def safe_text(selector):
+        el = card.query_selector(selector)
+        return clean_text(el.inner_text()) if el else ""
+    
+    # Extract job URL
+    raw_url = card.get_attribute("href") or ""
+    job_url = urljoin(page.url, raw_url) if raw_url else ""
+    
+    # Extract title - from h3 or h4 with job-title class
+    title = safe_text("h4.kh-job-title, h3.job-title")
+    if not title:
+        # Try alternative title selectors
+        title_el = card.query_selector(".job-title, .kh-job-title")
+        title = clean_text(title_el.inner_text()) if title_el else ""
+    
+    # Extract posted date - from span.text-secondary
+    posted_raw = safe_text("span.text-secondary")
+    
+    # Extract location - from span with title attribute
+    location = ""
+    location_el = card.query_selector("span[title]")
+    if location_el:
+        location = clean_text(location_el.get_attribute("title") or "")
+    
+    # Extract experience - from span with title containing years
+    exp_text = ""
+    exp_elements = card.query_selector_all("span[title*='year'], span[title*='Year'], span.font-large.text-truncate-1")
+    for el in exp_elements:
+        text = clean_text(el.inner_text())
+        if any(x in text.lower() for x in ['year', 'yr', 'fresher', '0']):
+            exp_text = text
+            break
+    
+    # Extract job type - usually after experience with dot separator
+    job_type = ""
+    text_elements = card.query_selector_all("span.font-large.text-truncate-1, span.text-capitalize")
+    for el in text_elements:
+        text = clean_text(el.inner_text())
+        if text and not any(x in text.lower() for x in ['year', 'yr', 'fresher']) and len(text) < 30:
+            if "full" in text.lower() or "part" in text.lower() or "time" in text.lower():
+                job_type = text
+                break
+    
+    # If job type not found, try to find it after the dot separators
+    if not job_type:
+        all_text = clean_text(card.inner_text())
+        parts = all_text.split('•')
+        if len(parts) >= 3:
+            potential_type = parts[2].strip()
+            if len(potential_type) < 30:
+                job_type = potential_type
+    
+    return {
+        "title": title,
+        "job_url": job_url,
+        "posted_raw": posted_raw,
+        "location": location,
+        "exp_text": exp_text,
+        "job_type": job_type
+    }
+
+
 def scrape_keka_jobs(page, url, scrape_uuid):
     jobs = []
     print(f"Scanning: {url}")
@@ -174,6 +273,12 @@ def scrape_keka_jobs(page, url, scrape_uuid):
     try:
         page.goto(url, timeout=60000, wait_until="domcontentloaded")
         wait_for_html_ready_sync(page, timeout=25000)
+        
+        # Scroll to load all jobs
+        for _ in range(3):
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(0.5)
+            
     except SyncTimeoutError:
         print(f"Timeout reaching: {url}")
         return []
@@ -187,37 +292,37 @@ def scrape_keka_jobs(page, url, scrape_uuid):
         return []
 
     for card in job_cards:
-        def safe_text(selector):
-            el = card.query_selector(selector)
-            return clean_text(el.inner_text()) if el else ""
-
-        raw_url = card.get_attribute("href") or ""
-        if raw_url and not raw_url.startswith("http"):
-            job_url = urljoin(url, raw_url)
-        else:
-            job_url = raw_url
-
-        title = safe_text("h4.kh-job-title, h3.job-title")
-        posted_raw = safe_text("small, span.text-secondary")
-        job_type = safe_text(".job-type, .type")
-
-        now_iso = datetime.now(timezone.utc).isoformat()
-
-        jobs.append({
-            "created_at": now_iso,
-            "updated_at": now_iso,
-            "scrape_id": scrape_uuid,
-            "title": title,
-            "job_url": job_url,
-            "is_active": True,
-            "published_date": normalize_posted_date(posted_raw),
-            "job_type": job_type if job_type else None,
-            "original_description": None,
-            "internal_slug": None,
-            "min_exp": None,
-            "max_exp": None,
-            "location": None,
-        })
+        try:
+            details = extract_job_card_details(card)
+            
+            if not details["job_url"]:
+                continue
+                
+            min_exp, max_exp = parse_experience(details["exp_text"])
+            
+            now_iso = datetime.now(timezone.utc).isoformat()
+            
+            job = {
+                "created_at": now_iso,
+                "updated_at": now_iso,
+                "scrape_id": scrape_uuid,
+                "title": details["title"],
+                "job_url": details["job_url"],
+                "is_active": True,
+                "published_date": normalize_posted_date(details["posted_raw"]),
+                "job_type": details["job_type"] if details["job_type"] else None,
+                "original_description": None,
+                "internal_slug": None,
+                "min_exp": min_exp,
+                "max_exp": max_exp,
+                "location": details["location"] if details["location"] else None,
+            }
+            
+            jobs.append(job)
+            
+        except Exception as e:
+            print(f"Error processing job card: {e}")
+            continue
 
     return jobs
 
@@ -269,9 +374,10 @@ def run_stage_1_discovery():
 
                 if company_jobs:
                     all_jobs.extend(company_jobs)
+                    print(f"Found {len(company_jobs)} jobs from {company_url}")
 
             except Exception as e:
-                print(f"Critical failure: {e}")
+                print(f"Critical failure for {company_url}: {e}")
                 finish_iso = datetime.now(timezone.utc).isoformat()
                 scrape_record["finished_at"] = finish_iso
                 scrape_record["updated_at"] = finish_iso
@@ -282,6 +388,16 @@ def run_stage_1_discovery():
         browser.close()
 
     clean_jobs = [j for j in all_jobs if j.get("job_url")]
+
+    # Print sample of extracted data
+    if clean_jobs:
+        print(f"\nSample job data from Stage 1:")
+        sample = clean_jobs[0]
+        print(f"Title: {sample.get('title')}")
+        print(f"Location: {sample.get('location')}")
+        print(f"Experience: {sample.get('min_exp')} - {sample.get('max_exp')}")
+        print(f"Job Type: {sample.get('job_type')}")
+        print(f"Published: {sample.get('published_date')}")
 
     if all_scrapes:
         pd.DataFrame(all_scrapes).to_csv(OUTPUT_SCRAPES_FILE, index=False)
@@ -298,9 +414,10 @@ def run_stage_1_discovery():
 def get_keka_jobs_from_supabase():
     print("Fetching pending Keka jobs from Supabase...")
     try:
+        # Get jobs that are missing description OR missing location/min_exp/job_type
         res = (
             supabase.table(JOBS_TABLE)
-            .select("id, job_url, scrapes_duplicate(ats_website(ats_name))")
+            .select("id, job_url, location, min_exp, max_exp, job_type, scrapes_duplicate(ats_website(ats_name))")
             .is_("original_description", "null")
             .execute()
         )
@@ -318,8 +435,17 @@ def get_keka_jobs_from_supabase():
     )
 
     keka_df = df[df["ats_name"].str.strip().str.lower().str.contains("keka", na=False)].copy()
-    print(f"Total pending jobs: {len(df)} | Keka jobs to scrape: {len(keka_df)}")
-    return keka_df
+    
+    # Also filter jobs that need enrichment (missing data)
+    incomplete_jobs = keka_df[
+        keka_df["original_description"].isna() | 
+        keka_df["location"].isna() | 
+        keka_df["min_exp"].isna() | 
+        keka_df["job_type"].isna()
+    ]
+    
+    print(f"Total pending jobs: {len(keka_df)} | Keka jobs needing enrichment: {len(incomplete_jobs)}")
+    return incomplete_jobs
 
 
 def update_supabase_record(job_id, payload):
@@ -353,6 +479,12 @@ async def wait_for_html_ready_async(page, timeout=25000):
 async def scrape_job_async(browser, row, semaphore):
     job_url = row.get("job_url", "")
     job_id = row.get("id")
+    existing_data = {
+        "location": row.get("location"),
+        "min_exp": row.get("min_exp"),
+        "max_exp": row.get("max_exp"),
+        "job_type": row.get("job_type")
+    }
 
     if not job_url:
         return
@@ -373,36 +505,63 @@ async def scrape_job_async(browser, row, semaphore):
                 except:
                     return ""
 
+            # Get job details from detail page
             experience_text = await safe_text("span.ki-user-tie >> xpath=../span[2]")
             location = await safe_text("span.ki-location >> xpath=../span[2]")
             job_type = await safe_text("span.ki-briefcase >> xpath=../span[2]")
 
+            # Extract full description
             description = ""
             try:
-                if await page.locator(".job-description-container").count() > 0:
-                    container = page.locator(".job-description-container")
-                    li_texts = await container.locator("li").all_inner_texts()
-                    if li_texts:
-                        description = " | ".join(clean_text(t) for t in li_texts if t.strip())
-                    else:
-                        description = clean_text(await container.inner_text())
-            except:
-                pass
+                desc_locator = page.locator("xpath=//div[contains(@class, 'job-description-container')]")
+                if await desc_locator.count() > 0:
+                    description = clean_text(await desc_locator.first.inner_text())
+                
+                if not description:
+                    description = await page.evaluate("""() => {
+                        const container = document.querySelector('.job-description-container.ql-editor');
+                        return container ? container.innerText : '';
+                    }""")
+                    description = clean_text(description)
+                    
+            except Exception as e:
+                print(f"Error extracting description: {e}")
+                try:
+                    if await page.locator(".job-description-container").count() > 0:
+                        container = page.locator(".job-description-container")
+                        li_texts = await container.locator("li").all_inner_texts()
+                        if li_texts:
+                            description = " | ".join(clean_text(t) for t in li_texts if t.strip())
+                        else:
+                            description = clean_text(await container.inner_text())
+                except:
+                    pass
 
             min_exp, max_exp = parse_experience(experience_text)
 
-            payload = {
-                "min_exp": min_exp,
-                "max_exp": max_exp,
-                "location": location if location else None,
-                "job_type": job_type if job_type else None,
-                "original_description": description if description else None,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
+            # Only update fields that are missing or need improvement
+            payload = {}
+            
+            # Prefer data from detail page over card data
+            if location and (not existing_data["location"] or len(location) > len(str(existing_data["location"] or ""))):
+                payload["location"] = location
+            elif not existing_data["location"] and location:
+                payload["location"] = location
+                
+            if min_exp is not None and existing_data["min_exp"] is None:
+                payload["min_exp"] = min_exp
+            if max_exp is not None and existing_data["max_exp"] is None:
+                payload["max_exp"] = max_exp
+            if job_type and (not existing_data["job_type"] or len(job_type) > len(str(existing_data["job_type"] or ""))):
+                payload["job_type"] = job_type
+                
+            # Always update description if we got one
+            if description:
+                payload["original_description"] = description
 
-            payload = {k: v for k, v in payload.items() if v is not None and v != ""}
-
-            await asyncio.to_thread(update_supabase_record, job_id, payload)
+            if payload:
+                payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+                await asyncio.to_thread(update_supabase_record, job_id, payload)
 
         except Exception as e:
             print(f"Failed: {job_url[-40:]} | {e}")
