@@ -22,8 +22,8 @@ STATUS_NOT_FOUND = "not ats found"
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ufnaxahhlblwpdomlybs.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
