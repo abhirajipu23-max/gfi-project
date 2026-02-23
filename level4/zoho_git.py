@@ -17,8 +17,10 @@ from supabase import create_client, Client
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ufnaxahhlblwpdomlybs.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa")
+import os
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 MAX_WORKERS = 5
 USER_AGENT = (
@@ -28,7 +30,7 @@ USER_AGENT = (
 )
 
 SCRAPES_TABLE = "scrapes_duplicate"
-JOBS_TABLE = "jobs_duplicate"
+JOBS_TABLE = "jobs"
 
 OUTPUT_JOBS_FILE = "zoho_jobs.csv"
 OUTPUT_SCRAPES_FILE = "zoho_scrapes.csv"

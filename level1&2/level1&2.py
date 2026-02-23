@@ -21,8 +21,8 @@ logging.getLogger("httpx").setLevel(logging.CRITICAL)
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ufnaxahhlblwpdomlybs.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -231,9 +231,9 @@ async def find_job_page_for_domain(domain: str):
 
 # --- SUPABASE DB HELPERS ---
 
-def update_companies_list_status(list_id: int, status: str):
+def update_input_list_status(list_id: int, status: str):
     try:
-        supabase.table("companies_list").update({"status": status}).eq("id", list_id).execute()
+        supabase.table("input_list").update({"status": status}).eq("id", list_id).execute()
         print(f"📝 STATUS UPDATED: id={list_id} -> {status}")
     except Exception as e:
         print(f"❌ Failed updating status for id={list_id}: {e}")
@@ -283,24 +283,24 @@ def insert_into_companies(data: dict):
         print(f"❌ DB ERROR for {data['name']}: {e}")
         return False
 
-def get_companies_list_from_supabase():
+def get_input_list_from_supabase():
     try:
         # 🔥 Only fetch rows where status is NULL (not processed yet)
         res = (
-            supabase.table("companies_list")
+            supabase.table("input_list")
             .select("id,name,domain,description,status")
             .is_("status", "null")
             .execute()
         )
         return res.data or []
     except Exception as e:
-        print(f"❌ Failed fetching companies_list: {e}")
+        print(f"❌ Failed fetching input_list: {e}")
         return []
 
 # --- MAIN WORKER ---
 
 async def process_supabase_companies(concurrency: int = 10):
-    rows = get_companies_list_from_supabase()
+    rows = get_input_list_from_supabase()
 
     if not rows:
         print("✅ No pending companies found (all have status).")
@@ -326,7 +326,7 @@ async def process_supabase_companies(concurrency: int = 10):
                 check_homepage_exists_in_companies(verified_homepage_url)
                 or check_name_exists_in_companies(company_name)
             ):
-                update_companies_list_status(list_id, "Already Exist")
+                update_input_list_status(list_id, "Already Exist")
                 return
 
             # Scrape career page
@@ -354,17 +354,17 @@ async def process_supabase_companies(concurrency: int = 10):
                 inserted = insert_into_companies(db_row)
 
                 if inserted:
-                    update_companies_list_status(list_id, "Scanned")
+                    update_input_list_status(list_id, "Scanned")
                 else:
-                    update_companies_list_status(list_id, "Insert Failed")
+                    update_input_list_status(list_id, "Insert Failed")
             else:
-                update_companies_list_status(list_id, "No Career Page")
+                update_input_list_status(list_id, "No Career Page")
 
     await asyncio.gather(*(worker(row) for row in rows))
 
 if __name__ == "__main__":
     try:
-        print("Starting Supabase Pipeline (Input: companies_list)...")
+        print("Starting Supabase Pipeline (Input: input_list)...")
         asyncio.run(process_supabase_companies(concurrency=20))
         print("Pipeline Complete.")
     except KeyboardInterrupt:

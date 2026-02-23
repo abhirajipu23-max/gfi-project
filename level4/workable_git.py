@@ -15,11 +15,13 @@ from supabase import create_client, Client
 
 load_dotenv()
 
-SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
-SUPABASE_KEY = "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa"
+import os
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 SCRAPES_TABLE = "scrapes_duplicate"
-JOBS_TABLE = "jobs_duplicate"
+JOBS_TABLE = "jobs"
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

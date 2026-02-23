@@ -13,10 +13,12 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
-SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
-SUPABASE_KEY = "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa"
+import os
 
-JOBS_TABLE = "jobs_duplicate"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+JOBS_TABLE = "jobs"
 SCRAPES_TABLE = "scrapes_duplicate"
 FINAL_BACKUP_FILE = "smartrecruiters_jobs_backup.csv"
 

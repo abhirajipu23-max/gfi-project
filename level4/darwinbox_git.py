@@ -5,17 +5,17 @@ import uuid
 import asyncio
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
-
 from playwright.sync_api import sync_playwright
 from playwright.async_api import async_playwright
-
+import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
+import os
 
-SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
-SUPABASE_KEY = "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -26,7 +26,7 @@ BATCH_SIZE = 100
 MAX_CONCURRENT_PAGES = 15
 
 SCRAPES_TABLE = "scrapes_duplicate"
-JOBS_TABLE = "jobs_duplicate"
+JOBS_TABLE = "jobs"
 
 
 def clean_text(text: str) -> str:

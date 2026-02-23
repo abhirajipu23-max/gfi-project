@@ -14,8 +14,10 @@ from supabase import create_client, Client
 
 load_dotenv()
 
-SUPABASE_URL = "https://ufnaxahhlblwpdomlybs.supabase.co"
-SUPABASE_KEY = "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa"
+import os
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -23,7 +25,7 @@ OUTPUT_JOBS_FILE = "keka_jobs.csv"
 OUTPUT_SCRAPES_FILE = "keka_scrapes.csv"
 
 SCRAPES_TABLE = "scrapes_duplicate"
-JOBS_TABLE = "jobs_duplicate"
+JOBS_TABLE = "jobs"
 
 BATCH_SIZE = 100
 MAX_CONCURRENT_PAGES = 5
@@ -201,6 +203,20 @@ def scrape_keka_jobs(page, url, scrape_uuid):
         posted_raw = safe_text("small, span.text-secondary")
         job_type = safe_text(".job-type, .type")
 
+        # --- NEW: Location Extraction for Stage 1 ---
+        # Based on snippet: span.font-large is used for Location AND Experience
+        # Location is typically the first one in the container
+        location = ""
+        try:
+            # Try specific selector based on the snippet provided
+            # Locates the 'font-large' span that is likely the location
+            loc_element = card.query_selector("span.font-large")
+            if loc_element:
+                location = clean_text(loc_element.inner_text())
+        except:
+            pass
+        # --------------------------------------------
+
         now_iso = datetime.now(timezone.utc).isoformat()
 
         jobs.append({
@@ -216,7 +232,7 @@ def scrape_keka_jobs(page, url, scrape_uuid):
             "internal_slug": None,
             "min_exp": None,
             "max_exp": None,
-            "location": None,
+            "location": location if location else None, # Store extracted location
         })
 
     return jobs
@@ -298,9 +314,10 @@ def run_stage_1_discovery():
 def get_keka_jobs_from_supabase():
     print("Fetching pending Keka jobs from Supabase...")
     try:
+        # Added 'location' to select query to check existing data in Stage 2
         res = (
             supabase.table(JOBS_TABLE)
-            .select("id, job_url, scrapes_duplicate(ats_website(ats_name))")
+            .select("id, job_url, location, scrapes_duplicate(ats_website(ats_name))")
             .is_("original_description", "null")
             .execute()
         )
@@ -353,6 +370,8 @@ async def wait_for_html_ready_async(page, timeout=25000):
 async def scrape_job_async(browser, row, semaphore):
     job_url = row.get("job_url", "")
     job_id = row.get("id")
+    # Get existing location from DB row
+    current_db_location = row.get("location")
 
     if not job_url:
         return
@@ -374,7 +393,10 @@ async def scrape_job_async(browser, row, semaphore):
                     return ""
 
             experience_text = await safe_text("span.ki-user-tie >> xpath=../span[2]")
-            location = await safe_text("span.ki-location >> xpath=../span[2]")
+            
+            # Stage 2 Location Extraction
+            extracted_location = await safe_text("span.ki-location >> xpath=../span[2]")
+            
             job_type = await safe_text("span.ki-briefcase >> xpath=../span[2]")
 
             description = ""
@@ -394,11 +416,20 @@ async def scrape_job_async(browser, row, semaphore):
             payload = {
                 "min_exp": min_exp,
                 "max_exp": max_exp,
-                "location": location if location else None,
+                # "location" is handled below with specific logic
                 "job_type": job_type if job_type else None,
                 "original_description": description if description else None,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
+
+            # --- NEW: Stage 2 Logic for Location ---
+            # If we found a location on the detailed page:
+            if extracted_location:
+                # If DB is null (None or empty string), update it.
+                if not current_db_location: 
+                    payload["location"] = extracted_location
+                # Else: DB already has data, so we PASS (do not add to payload)
+            # ---------------------------------------
 
             payload = {k: v for k, v in payload.items() if v is not None and v != ""}
 

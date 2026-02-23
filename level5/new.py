@@ -15,11 +15,13 @@ from groq import Groq, RateLimitError
 
 load_dotenv()
 
-TARGET_TABLE = "jobs_uploadable_duplicate"
-SOURCE_TABLE = "jobs_duplicate"
+TARGET_TABLE = "jobs_uploadable_wp"
+SOURCE_TABLE = "jobs"
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ufnaxahhlblwpdomlybs.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa")
+import os
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 GROQ_API_KEYS = [
     os.getenv("API_KEY1"),
