@@ -29,7 +29,7 @@ USER_AGENT = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-SCRAPES_TABLE = "scrapes_duplicate"
+SCRAPES_TABLE = "scrapes"
 JOBS_TABLE = "jobs"
 
 OUTPUT_JOBS_FILE = "zoho_jobs.csv"
@@ -444,7 +444,7 @@ class ZohoEnrichment:
                 supabase.table(JOBS_TABLE)
                 .select("""
                     id, job_url,
-                    scrapes_duplicate!inner (
+                    scrapes!inner (
                         ats_website!inner ( ats_name )
                     )
                 """)
@@ -455,7 +455,7 @@ class ZohoEnrichment:
             all_data = res.data or []
             zoho_jobs = [
                 j for j in all_data
-                if j["scrapes_duplicate"]["ats_website"]["ats_name"].strip().lower() == "zoho recruit"
+                if j["scrapes"]["ats_website"]["ats_name"].strip().lower() == "zoho recruit"
             ]
 
             print(f"Found {len(zoho_jobs)} Zoho jobs waiting for details.")
@@ -637,7 +637,7 @@ def export_zoho_jobs_backup_from_db():
     try:
         res = (
             supabase.table(JOBS_TABLE)
-            .select("* , scrapes_duplicate(ats_website(ats_name))")
+            .select("* , scrapes(ats_website(ats_name))")
             .execute()
         )
     except Exception as e:
@@ -650,15 +650,15 @@ def export_zoho_jobs_backup_from_db():
 
     df = pd.DataFrame(res.data)
 
-    if "scrapes_duplicate" in df.columns:
-        df["ats_name"] = df["scrapes_duplicate"].apply(
+    if "scrapes" in df.columns:
+        df["ats_name"] = df["scrapes"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
     df = df[df["ats_name"].astype(str).str.lower().str.contains("zoho recruit", na=False)].copy()
 
-    if "scrapes_duplicate" in df.columns:
-        df.drop(columns=["scrapes_duplicate"], inplace=True)
+    if "scrapes" in df.columns:
+        df.drop(columns=["scrapes"], inplace=True)
 
     df.to_csv(OUTPUT_JOBS_FILE, index=False)
     print(f"Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")

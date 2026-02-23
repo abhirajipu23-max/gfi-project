@@ -20,7 +20,7 @@ import os
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-SCRAPES_TABLE = "scrapes_duplicate"
+SCRAPES_TABLE = "scrapes"
 JOBS_TABLE = "jobs"
 
 USER_AGENT = (
@@ -145,7 +145,7 @@ class SupabaseManager:
             print("Fetching pending Workable jobs...")
             res = (
                 self.client.table(JOBS_TABLE)
-                .select("id, job_url, location, job_type, department, scrapes_duplicate(ats_website(ats_name))")
+                .select("id, job_url, location, job_type, department, scrapes(ats_website(ats_name))")
                 .is_("original_description", "null")
                 .execute()
             )
@@ -154,7 +154,7 @@ class SupabaseManager:
             pending = []
             for j in data:
                 try:
-                    ats_name = j["scrapes_duplicate"]["ats_website"]["ats_name"]
+                    ats_name = j["scrapes"]["ats_website"]["ats_name"]
                     if ats_filter.lower() in ats_name.lower():
                         pending.append(j)
                 except:
@@ -495,7 +495,7 @@ def export_workable_jobs_backup_from_db(db: SupabaseManager):
     try:
         res = (
             db.client.table(JOBS_TABLE)
-            .select("* , scrapes_duplicate(ats_website(ats_name))")
+            .select("* , scrapes(ats_website(ats_name))")
             .execute()
         )
     except Exception as e:
@@ -508,15 +508,15 @@ def export_workable_jobs_backup_from_db(db: SupabaseManager):
 
     df = pd.DataFrame(res.data)
 
-    if "scrapes_duplicate" in df.columns:
-        df["ats_name"] = df["scrapes_duplicate"].apply(
+    if "scrapes" in df.columns:
+        df["ats_name"] = df["scrapes"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
     df = df[df["ats_name"].astype(str).str.lower().str.contains("workable", na=False)].copy()
 
-    if "scrapes_duplicate" in df.columns:
-        df.drop(columns=["scrapes_duplicate"], inplace=True)
+    if "scrapes" in df.columns:
+        df.drop(columns=["scrapes"], inplace=True)
 
     df.to_csv(OUTPUT_JOBS_FILE, index=False)
     print(f"Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")

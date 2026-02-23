@@ -534,7 +534,7 @@ def extract_company_data(row):
     }
 
     try:
-        scrapes = _first_if_list(row.get("scrapes_duplicate"))
+        scrapes = _first_if_list(row.get("scrapes"))
         if not scrapes:
             return defaults
 
@@ -576,7 +576,7 @@ def run_pipeline():
     while True:
         print(f"\nFetching batch: Rows {offset} to {offset + BATCH_SIZE}...")
 
-        query = "*, scrapes_duplicate(ats_website(companies(name, homepage_url, logo_file_name, description)))"
+        query = "*, scrapes(ats_website(companies(name, homepage_url, logo_file_name, description)))"
 
         query_builder = (
             supabase.table(SOURCE_TABLE)

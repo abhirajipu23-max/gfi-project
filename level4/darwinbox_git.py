@@ -25,7 +25,7 @@ OUTPUT_SCRAPES_FILE = "darwinbox_scrapes.csv"
 BATCH_SIZE = 100
 MAX_CONCURRENT_PAGES = 15
 
-SCRAPES_TABLE = "scrapes_duplicate"
+SCRAPES_TABLE = "scrapes"
 JOBS_TABLE = "jobs"
 
 
@@ -413,7 +413,7 @@ def get_pending_darwinbox_jobs():
     try:
         res = (
             supabase.table(JOBS_TABLE)
-            .select("id, job_url, location, job_type, department, published_date, scrapes_duplicate(ats_website(ats_name))")
+            .select("id, job_url, location, job_type, department, published_date, scrapes(ats_website(ats_name))")
             .is_("original_description", "null")
             .execute()
         )
@@ -421,9 +421,9 @@ def get_pending_darwinbox_jobs():
         all_jobs = res.data or []
         darwin_jobs = [
             j for j in all_jobs
-            if j.get("scrapes_duplicate")
-            and j["scrapes_duplicate"].get("ats_website")
-            and "darwinbox" in str(j["scrapes_duplicate"]["ats_website"].get("ats_name", "")).lower()
+            if j.get("scrapes")
+            and j["scrapes"].get("ats_website")
+            and "darwinbox" in str(j["scrapes"]["ats_website"].get("ats_name", "")).lower()
         ]
 
         print(f"Total jobs pending enrichment: {len(darwin_jobs)}")
@@ -610,7 +610,7 @@ def export_darwinbox_jobs_backup_from_db():
     try:
         res = (
             supabase.table(JOBS_TABLE)
-            .select("* , scrapes_duplicate(ats_website(ats_name))")
+            .select("* , scrapes(ats_website(ats_name))")
             .execute()
         )
     except Exception as e:
@@ -623,15 +623,15 @@ def export_darwinbox_jobs_backup_from_db():
 
     df = pd.DataFrame(res.data)
 
-    if "scrapes_duplicate" in df.columns:
-        df["ats_name"] = df["scrapes_duplicate"].apply(
+    if "scrapes" in df.columns:
+        df["ats_name"] = df["scrapes"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
     df = df[df["ats_name"].str.lower().str.contains("darwinbox", na=False)].copy()
 
-    if "scrapes_duplicate" in df.columns:
-        df.drop(columns=["scrapes_duplicate"], inplace=True)
+    if "scrapes" in df.columns:
+        df.drop(columns=["scrapes"], inplace=True)
 
     df.to_csv(OUTPUT_JOBS_FILE, index=False)
     print(f"Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")

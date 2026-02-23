@@ -24,7 +24,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 OUTPUT_JOBS_FILE = "keka_jobs.csv"
 OUTPUT_SCRAPES_FILE = "keka_scrapes.csv"
 
-SCRAPES_TABLE = "scrapes_duplicate"
+SCRAPES_TABLE = "scrapes"
 JOBS_TABLE = "jobs"
 
 BATCH_SIZE = 100
@@ -317,7 +317,7 @@ def get_keka_jobs_from_supabase():
         # Added 'location' to select query to check existing data in Stage 2
         res = (
             supabase.table(JOBS_TABLE)
-            .select("id, job_url, location, scrapes_duplicate(ats_website(ats_name))")
+            .select("id, job_url, location, scrapes(ats_website(ats_name))")
             .is_("original_description", "null")
             .execute()
         )
@@ -330,7 +330,7 @@ def get_keka_jobs_from_supabase():
 
     df = pd.DataFrame(res.data)
 
-    df["ats_name"] = df["scrapes_duplicate"].apply(
+    df["ats_name"] = df["scrapes"].apply(
         lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
     )
 
@@ -467,7 +467,7 @@ def export_keka_jobs_backup_from_db():
     try:
         res = (
             supabase.table(JOBS_TABLE)
-            .select("* , scrapes_duplicate(ats_website(ats_name))")
+            .select("* , scrapes(ats_website(ats_name))")
             .execute()
         )
     except Exception as e:
@@ -480,15 +480,15 @@ def export_keka_jobs_backup_from_db():
 
     df = pd.DataFrame(res.data)
 
-    if "scrapes_duplicate" in df.columns:
-        df["ats_name"] = df["scrapes_duplicate"].apply(
+    if "scrapes" in df.columns:
+        df["ats_name"] = df["scrapes"].apply(
             lambda x: x["ats_website"]["ats_name"] if x and x.get("ats_website") else None
         )
 
     df = df[df["ats_name"].str.lower().str.contains("keka", na=False)].copy()
 
-    if "scrapes_duplicate" in df.columns:
-        df.drop(columns=["scrapes_duplicate"], inplace=True)
+    if "scrapes" in df.columns:
+        df.drop(columns=["scrapes"], inplace=True)
 
     df.to_csv(OUTPUT_JOBS_FILE, index=False)
     print(f"Final backup saved: {OUTPUT_JOBS_FILE} ({len(df)} rows)")
