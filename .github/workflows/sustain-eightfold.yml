@@ -1,0 +1,27 @@
+name: Running Smart ATS URLs
+
+on:
+  schedule:
+    - cron: "30 16 * * *"   # 10:00 PM IST
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: api_key
+
+    env:
+      SUPABASE_URL: ${{secrets.SUPABASE_URL}}
+      SUPABASE_KEY: ${{secrets.SUPABASE_KEY}}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - run: |
+          pip install -r requirements.txt
+          playwright install --with-deps
+
+      - run: python "Sustainability/Eightfold_full.py"
