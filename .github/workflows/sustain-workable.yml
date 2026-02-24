@@ -1,4 +1,4 @@
-name: Running Smart ATS URLs
+name: Running sustain-workable URLs
 
 on:
   schedule:

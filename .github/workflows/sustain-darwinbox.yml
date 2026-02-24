@@ -1,4 +1,4 @@
-name: Running Smart ATS URLs
+name: Running sustain-darwinbox URLs
 
 on:
   schedule:
