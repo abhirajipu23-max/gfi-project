@@ -326,77 +326,78 @@ def standardize_location(raw_location: str) -> str:
 
 def is_india_location(location_str: str) -> bool:
     """
-    Check if the standardized location belongs to India using Groq LLM.
-    Returns True if the location is in India (or Remote), False otherwise.
+    STRICT India physical location check using RAW jobs_sustain.location.
+    Returns True ONLY if physically inside India.
     """
     global current_key_index
-    
+
     if not location_str or pd.isna(location_str):
         return False
-    
-    location_lower = str(location_str).lower().strip()
-    
-    # Always keep Remote jobs
-    if location_lower in ("remote", "work from home", "wfh", "hybrid"):
-        return True
-    
-    # Fast path: save API calls if "india" is explicitly in the string
-    if "india" in location_lower:
-        return True
 
-    # Reject obvious non-India English words that contain "ind"
-    if location_lower in ("indiana", "indianapolis"):
-        return False
-        
-    # Check cache to avoid duplicate LLM calls
+    location_lower = str(location_str).strip().lower()
+
+    # Cache
     if location_lower in INDIA_LOCATION_CACHE:
         return INDIA_LOCATION_CACHE[location_lower]
 
-    prompt = (
-        f"Is '{location_str}' a city, state, or region located inside India? "
-        "Reply ONLY with 'True' or 'False'. No other text."
-    )
-    
+    prompt = f"""
+You are a geography validator.
+
+Question:
+Is this job location physically inside the country India?
+
+Location: "{location_str}"
+
+Rules:
+- Return ONLY True or False.
+- Indianapolis, Indiana = False
+- Indiana (USA) = False
+- Any USA location = False
+- Remote outside India = False
+- Remote India = True
+- Remote = True
+- If unclear = False
+- No explanations.
+
+Answer:
+"""
+
     total_keys = len(GROQ_API_KEYS)
     attempts = 0
-    
+
     while attempts < total_keys:
         try:
-            active_key = GROQ_API_KEYS[current_key_index] if GROQ_API_KEYS else None
-            if not active_key:
-                return False
-                
+            active_key = GROQ_API_KEYS[current_key_index]
             client = Groq(api_key=active_key)
+
             response = client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
-                    {"role": "system", "content": "You are a precise geographic classifier. Output ONLY 'True' or 'False'."},
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": "Return ONLY True or False."},
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=0,
                 max_tokens=5,
             )
-            
+
             result = response.choices[0].message.content.strip().lower()
             is_india = result.startswith("true")
-            
+
             INDIA_LOCATION_CACHE[location_lower] = is_india
             return is_india
-            
+
         except RateLimitError:
             current_key_index = (current_key_index + 1) % total_keys
             attempts += 1
             if attempts >= total_keys:
-                print("All Groq keys rate-limited during India location check.")
                 time.sleep(2)
+
         except Exception as e:
-            print(f"Groq API Error checking if location '{location_str}' is in India: {e}")
+            print(f"Groq India check error: {e}")
             break
-            
-    # Fallback if API fails completely
+
     INDIA_LOCATION_CACHE[location_lower] = False
     return False
-
 # ==================================================
 # UTILS & HELPERS
 # ==================================================
@@ -864,7 +865,7 @@ def run_pipeline():
                 standardized_location = standardize_location(raw_location)
                 
                 # Check if location is in India (using Groq)
-                if not is_india_location(standardized_location):
+                if not is_india_location(raw_location):
                     batch_india_skipped += 1
                     india_skipped += 1
                     print(f"Skipping Job ID {job_id} - Non-India location: {standardized_location}")
