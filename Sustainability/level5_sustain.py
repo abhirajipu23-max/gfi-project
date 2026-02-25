@@ -33,8 +33,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Network configuration
-BATCH_SIZE = 10  # Reduced from 50 to avoid timeouts
-UPSERT_CHUNK_SIZE = 5  # Split upserts into smaller chunks
+BATCH_SIZE = 50  # Reduced from 50 to avoid timeouts
+UPSERT_CHUNK_SIZE = 10  # Split upserts into smaller chunks
 REQUEST_TIMEOUT = 60  # Increased timeout
 CONNECTION_RETRIES = 5
 CONNECTION_BACKOFF_FACTOR = 3
