@@ -208,13 +208,14 @@ def map_department(text):
 
 
 # ==================================================
-# LOCATION STANDARDIZATION & FILTERING
+# LOCATION STANDARDIZATION
 # ==================================================
 
 LOCATION_CACHE = {}
 INDIA_LOCATION_CACHE = {}
 
 def clean_location(text: str) -> str:
+    """Clean raw location text before standardization"""
     if not text or pd.isna(text) or str(text).lower() == 'nan':
         return ""
     t = str(text).lower()
@@ -225,8 +226,49 @@ def clean_location(text: str) -> str:
     t = re.sub(r"\s+", " ", t)
     return t.strip()
 
+LOCATION_PROMPT_TEMPLATE = """
+You are a location normalization engine. Return ONLY the normalized location.
+
+RULES:
+1. SINGLE location: City, State, Country (e.g., Bangalore, Karnataka, India)
+2. MULTIPLE cities same country: City1, City2, Country (e.g., Bangalore, Mumbai, India)
+3. NO noise, NO extra words.
+
+Input: {location}
+Output:"""
+
+def post_process_location(llm_output: str) -> str:
+    """Python logic to enforce the format: City1, City2, Country (No State)"""
+    if not llm_output or ";" in llm_output: # Multi-country logic usually uses ;
+        return llm_output
+
+    parts = [p.strip() for p in llm_output.split(',')]
+    
+    # CASE: Multiple Cities + Country (No State)
+    # If LLM returned "City1, State1, City2, State2, Country", we strip states.
+    # We assume if parts > 3 and contains India, it's a multi-city list.
+    if len(parts) > 3:
+        country = parts[-1]
+        # Extract unique cities (assuming cities are the primary nouns)
+        # We take every other part if the LLM returned City, State, City, State
+        cities = []
+        for i in range(0, len(parts)-1):
+            # Very basic check: if the next part is a known country, current is a city
+            # Or just filter out common state names if necessary
+            cities.append(parts[i])
+        
+        # Heuristic: If we have multiple cities, just return City, City, Country
+        # We use dict.fromkeys to preserve order but remove duplicates
+        unique_cities = list(dict.fromkeys(cities))
+        # Remove the country name if it accidentally got into the city list
+        if country in unique_cities: unique_cities.remove(country)
+        
+        return f"{', '.join(unique_cities[:2])}, {country}"
+
+    return llm_output
+
 def standardize_single_location(raw_location: str) -> str:
-    """Clean and title-case a location string. No LLM needed — India check is done separately."""
+    """Standardize a single location using LLM"""
     if not raw_location:
         return ""
 
@@ -242,14 +284,44 @@ def standardize_single_location(raw_location: str) -> str:
     if lower in LOCATION_CACHE:
         return LOCATION_CACHE[lower]
 
-    # Title-case and cache — no LLM; India filtering happens in is_india_location()
-    result = cleaned_loc.title()
-    LOCATION_CACHE[lower] = result
-    return result
+    try:
+        # Use a separate Groq client for location standardization
+        # Use first available key from the list
+        active_key = GROQ_API_KEYS[current_key_index] if GROQ_API_KEYS else None
+        if not active_key:
+            return cleaned_loc.title()
+        
+        location_client = Groq(api_key=active_key)
+        response = location_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": LOCATION_PROMPT_TEMPLATE.format(location=cleaned_loc)}],
+            temperature=0,
+            max_tokens=50,
+        )
+
+        result = response.choices[0].message.content.strip().split('\n')[0]
+        result = result.split("Example")[0].rstrip('.: ')
+
+        # Apply post-processing
+        result = post_process_location(result)
+        
+        LOCATION_CACHE[lower] = result
+        return result
+
+    except RateLimitError:
+        print(f"Rate Limit hit during location standardization for '{cleaned_loc}'")
+        # Fall back to cleaned location
+        return cleaned_loc.title()
+    
+    except Exception as e:
+        print(f"Error standardizing location '{cleaned_loc}': {e}")
+        return cleaned_loc.title()
 
 def standardize_location(raw_location: str) -> str:
+    """Main function to standardize location - to be used in the pipeline"""
     if pd.isna(raw_location) or not str(raw_location).strip():
         return ""
+    
     return standardize_single_location(str(raw_location))
 
 def is_india_location(location_str: str) -> bool:
@@ -699,7 +771,7 @@ def run_pipeline():
     print("   - Filter: Job ID Exists in Target")
     print("   - Filter: Description words <= 50")  
     print("   - Filter: Published Date > 90 days ago")  
-    print("   - Added: Location Standardization")
+    print("   - Added: Location Standardization (LLM-based)")
     print("   - Added: India-only location filter (Groq LLM)")  
     print("   - Updated: Direct mapping to companies_sustain")
 
