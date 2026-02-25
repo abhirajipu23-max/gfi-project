@@ -22,8 +22,8 @@ load_dotenv()
 TARGET_TABLE = "jobs_uploadable_wp"
 SOURCE_TABLE = "jobs"
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ufnaxahhlblwpdomlybs.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa")
 
 GROQ_API_KEYS = [
     os.getenv("API_KEY1"),
@@ -324,7 +324,8 @@ def clean_utm_url(url):
         return url
 
 def cleanup_old_jobs():
-    cutoff_date = (pd.Timestamp.utcnow() - pd.DateOffset(months=6)).strftime("%Y-%m-%d")
+    # CHANGED: Using 90 days instead of 3 months
+    cutoff_date = (pd.Timestamp.utcnow() - pd.DateOffset(days=90)).strftime("%Y-%m-%d")
     try:
         res = (
             supabase.table(TARGET_TABLE)
@@ -333,7 +334,7 @@ def cleanup_old_jobs():
             .execute()
         )
         deleted_count = len(res.data) if res and res.data else 0
-        print(f"🗑️ Deleted {deleted_count} old jobs from {TARGET_TABLE}")
+        print(f"🗑️ Deleted {deleted_count} jobs published more than 90 days ago from {TARGET_TABLE}")
     except Exception as e:
         print(f"❌ Cleanup failed: {e}")
 
@@ -564,14 +565,15 @@ def run_pipeline():
     cleanup_old_jobs()
     print(f"Starting Optimized Pipeline -> Target: {TARGET_TABLE}")
     print("   - Filter: Job ID Exists in Target")
-    print("   - Filter: Description words <= 20")
-    print("   - Filter: Published Date > 6 months ago")
+    print("   - Filter: Description words <= 50")  # CHANGED: 20 to 50
+    print("   - Filter: Published Date > 90 days ago")  # CHANGED: 3 months to 90 days
     print("   - Added: Location Standardization")
 
     offset = 0
     total_processed = 0
 
-    cutoff_date = pd.Timestamp.now(tz="UTC") - pd.DateOffset(months=6)
+    # CHANGED: Using 90 days instead of 3 months
+    cutoff_date = pd.Timestamp.now(tz="UTC") - pd.DateOffset(days=90)
 
     while True:
         print(f"\nFetching batch: Rows {offset} to {offset + BATCH_SIZE}...")
@@ -612,7 +614,7 @@ def run_pipeline():
         df["word_count"] = df["original_description"].apply(
             lambda x: len(str(x).split()) if pd.notna(x) else 0
         )
-        mask_long_desc = df["word_count"] > 50
+        mask_long_desc = df["word_count"] > 50  # This stays as > 50
 
         df["published_date_dt"] = pd.to_datetime(
             df["published_date"], errors="coerce", utc=True
@@ -629,9 +631,9 @@ def run_pipeline():
         if skipped_exists > 0:
             print(f"Skipped {skipped_exists} jobs (Already Exist)")
         if skipped_short > 0:
-            print(f"Skipped {skipped_short} jobs (Desc <= 20 words)")
+            print(f"Skipped {skipped_short} jobs (Desc <= 50 words)")  # CHANGED: 20 to 50
         if skipped_old > 0:
-            print(f"Skipped {skipped_old} jobs (Older than 6 months)")
+            print(f"Skipped {skipped_old} jobs (Older than 90 days)")  # CHANGED: 3 months to 90 days
 
         if df_clean.empty:
             print("Batch fully filtered out. Next...")
