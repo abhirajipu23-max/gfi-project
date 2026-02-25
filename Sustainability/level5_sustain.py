@@ -225,49 +225,8 @@ def clean_location(text: str) -> str:
     t = re.sub(r"\s+", " ", t)
     return t.strip()
 
-LOCATION_PROMPT_TEMPLATE = """
-You are a location classifier. Determine if the given location should be kept for an India-focused job board.
-
-RETURN TRUE FOR:
-- Any location in India (e.g., Mumbai, Bangalore, Delhi, etc.)
-- "Remote" or any variation (remote, work from home, wfh, hybrid)
-- Locations that include India (e.g., "Mumbai, India", "Bangalore, Karnataka, India")
-
-RETURN FALSE FOR:
-- "Indianapolis" (this is in USA, NOT India)
-- "Indiana" (this is a US state, NOT India)
-- Any location outside India (USA, UK, Europe, Australia, Singapore, etc.)
-- Locations that mention other countries
-
-IMPORTANT NOTES:
-- "Remote" should ALWAYS return true - we keep all remote jobs regardless of location
-- Do not confuse words containing "ind" with India (like Indiana, Indianapolis)
-
-Return ONLY "true" or "false" - no other text or punctuation.
-
-Location: {location}
-Output:"""
-
-def post_process_location(llm_output: str) -> str:
-    if not llm_output or ";" in llm_output:
-        return llm_output
-
-    parts = [p.strip() for p in llm_output.split(',')]
-    
-    if len(parts) > 3:
-        country = parts[-1]
-        cities = []
-        for i in range(0, len(parts)-1):
-            cities.append(parts[i])
-        
-        unique_cities = list(dict.fromkeys(cities))
-        if country in unique_cities: unique_cities.remove(country)
-        
-        return f"{', '.join(unique_cities[:2])}, {country}"
-
-    return llm_output
-
 def standardize_single_location(raw_location: str) -> str:
+    """Clean and title-case a location string. No LLM needed — India check is done separately."""
     if not raw_location:
         return ""
 
@@ -276,36 +235,17 @@ def standardize_single_location(raw_location: str) -> str:
         return ""
     
     lower = cleaned_loc.lower()
-    if "remote" in lower: return "Remote"
-    if "head office" in lower: return "Head Office"
-    if lower in LOCATION_CACHE: return LOCATION_CACHE[lower]
+    if "remote" in lower or "work from home" in lower or "wfh" in lower:
+        return "Remote"
+    if "head office" in lower:
+        return "Head Office"
+    if lower in LOCATION_CACHE:
+        return LOCATION_CACHE[lower]
 
-    try:
-        active_key = GROQ_API_KEYS[current_key_index] if GROQ_API_KEYS else None
-        if not active_key:
-            return cleaned_loc.title()
-        
-        location_client = Groq(api_key=active_key)
-        response = location_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": LOCATION_PROMPT_TEMPLATE.format(location=cleaned_loc)}],
-            temperature=0,
-            max_tokens=50,
-        )
-
-        result = response.choices[0].message.content.strip().split('\n')[0]
-        result = result.split("Example")[0].rstrip('.: ')
-        result = post_process_location(result)
-        
-        LOCATION_CACHE[lower] = result
-        return result
-
-    except RateLimitError:
-        print(f"Rate Limit hit during location standardization for '{cleaned_loc}'")
-        return cleaned_loc.title()
-    except Exception as e:
-        print(f"Error standardizing location '{cleaned_loc}': {e}")
-        return cleaned_loc.title()
+    # Title-case and cache — no LLM; India filtering happens in is_india_location()
+    result = cleaned_loc.title()
+    LOCATION_CACHE[lower] = result
+    return result
 
 def standardize_location(raw_location: str) -> str:
     if pd.isna(raw_location) or not str(raw_location).strip():
@@ -315,7 +255,7 @@ def standardize_location(raw_location: str) -> str:
 def is_india_location(location_str: str) -> bool:
     """
     Check if the standardized location belongs to India using Groq LLM.
-    Returns True if India is the location, False otherwise.
+    Returns True if the location is in India (or Remote), False otherwise.
     """
     global current_key_index
     
@@ -324,15 +264,26 @@ def is_india_location(location_str: str) -> bool:
     
     location_lower = str(location_str).lower().strip()
     
+    # Always keep Remote jobs
+    if location_lower in ("remote", "work from home", "wfh", "hybrid"):
+        return True
+    
     # Fast path: save API calls if "india" is explicitly in the string
     if "india" in location_lower:
         return True
+
+    # Reject obvious non-India English words that contain "ind"
+    if location_lower in ("indiana", "indianapolis"):
+        return False
         
     # Check cache to avoid duplicate LLM calls
     if location_lower in INDIA_LOCATION_CACHE:
         return INDIA_LOCATION_CACHE[location_lower]
-        
-    prompt = f"Is the location '{location_str}' situated in India? Reply ONLY with 'True' or 'False'. No other text."
+
+    prompt = (
+        f"Is '{location_str}' a city, state, or region located inside India? "
+        "Reply ONLY with 'True' or 'False'. No other text."
+    )
     
     total_keys = len(GROQ_API_KEYS)
     attempts = 0
@@ -347,7 +298,7 @@ def is_india_location(location_str: str) -> bool:
             response = client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
-                    {"role": "system", "content": "You are a precise geographic API. You only output 'True' or 'False'."},
+                    {"role": "system", "content": "You are a precise geographic classifier. Output ONLY 'True' or 'False'."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0,
@@ -355,7 +306,7 @@ def is_india_location(location_str: str) -> bool:
             )
             
             result = response.choices[0].message.content.strip().lower()
-            is_india = "true" in result
+            is_india = result.startswith("true")
             
             INDIA_LOCATION_CACHE[location_lower] = is_india
             return is_india
