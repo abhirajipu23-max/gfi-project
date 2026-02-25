@@ -601,6 +601,7 @@ def run_pipeline():
             supabase.table(TARGET_TABLE)
             .select("job_id")
             .in_("job_id", batch_ids)
+            .eq("source_table", SOURCE_TABLE)  # Only check this pipeline's records
         )
 
         check_res = supabase_execute_with_retry(check_query)
@@ -682,7 +683,8 @@ def run_pipeline():
 
             final_obj = {
                 "job_id": int(clean_val(row["id"])),
-                
+                "source_table": SOURCE_TABLE,  # Tag source to avoid conflicts with jobs_sustain pipeline
+
                 "company_name": company_name,
                 "company_website": company_website_cleaned,
 
@@ -694,8 +696,7 @@ def run_pipeline():
                 "max_ex": int(max_e) if pd.notna(max_e) else None,
                 "experience_range": exp_range,
 
-                "location": standardized_location,  # Use standardized location
-                # REMOVE THIS LINE: "raw_location": clean_val(raw_location),  # Keep original for reference
+                "location": standardized_location,
                 "job_type": normalize_job_type(row.get("job_type")),
 
                 "logo_file": clean_val(comp_data["logo_file_name"]),
@@ -705,6 +706,7 @@ def run_pipeline():
 
                 "department": mapped_department,
                 "industry": clean_val(row.get("industry")),
+                "is_synced": False,
             }
 
             processed_rows.append(final_obj)

@@ -740,6 +740,7 @@ def run_pipeline():
                         supabase.table(TARGET_TABLE)
                         .select("job_id")
                         .in_("job_id", batch_ids)
+                        .eq("source_table", SOURCE_TABLE)  # Only check this pipeline's records
             )
 
             check_res = supabase_execute_with_retry(check_query)
@@ -828,6 +829,7 @@ def run_pipeline():
 
                 final_obj = {
                     "job_id": int(clean_val(row["id"])),
+                    "source_table": SOURCE_TABLE,  # Tag source to avoid conflicts with jobs pipeline
                     "company_name": company_name,
                     "company_website": company_website_cleaned,
                     "job_url": job_url_cleaned,
