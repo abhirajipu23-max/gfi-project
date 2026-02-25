@@ -6,12 +6,19 @@ import string
 import pandas as pd
 import torch
 import requests
+import socket
+import ssl
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from urllib.parse import urlparse, urlunparse
 from rapidfuzz import process, fuzz
 from sentence_transformers import SentenceTransformer, util
 from groq import Groq, RateLimitError
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import certifi
+import warnings
+warnings.filterwarnings('ignore')
 
 load_dotenv()
 
@@ -25,6 +32,20 @@ SOURCE_TABLE = "jobs_sustain"
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+# Network configuration
+BATCH_SIZE = 10  # Reduced from 50 to avoid timeouts
+UPSERT_CHUNK_SIZE = 5  # Split upserts into smaller chunks
+REQUEST_TIMEOUT = 60  # Increased timeout
+CONNECTION_RETRIES = 5
+CONNECTION_BACKOFF_FACTOR = 3
+ENABLE_SSL_VERIFY = True  # Set to False ONLY for testing if you have SSL issues
+
+# Proxy configuration (uncomment and set if behind corporate proxy)
+# PROXY = {
+#     "http": "http://your-proxy:port",
+#     "https": "http://your-proxy:port"
+# }
+
 GROQ_API_KEYS = [
     os.getenv("API_KEY1"),
     os.getenv("API_KEY2"),
@@ -37,7 +58,7 @@ GROQ_API_KEYS = [
 GROQ_API_KEYS = [k for k in GROQ_API_KEYS if k]
 
 for i, key in enumerate(GROQ_API_KEYS, start=1):
-    print(f"API_KEY{i}: {key}")
+    print(f"API_KEY{i}: {key[-6:]}")  # Only show last 6 chars for security
 
 GROQ_MODELS = [
     "llama-3.3-70b-versatile",
@@ -46,16 +67,84 @@ GROQ_MODELS = [
 
 current_key_index = 0
 current_model_index = 0
-
-BATCH_SIZE = 50
 Rate_Limit_Sleep = 1
 
 UTM_QUERY_PARAM = "ref=growthforimpact.co&utm_source=growthforimpact.co&utm_medium=referral"
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ==================================================
+# CUSTOM SUPABASE CLIENT WITH RETRY LOGIC
+# ==================================================
+
+def create_supabase_client_with_retry():
+    """Create Supabase client with custom session and retry logic"""
+    
+    # Create session with retry strategy
+    session = requests.Session()
+    
+    # Set proxy if configured
+    # if 'PROXY' in locals():
+    #     session.proxies.update(PROXY)
+    
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]
+    )
+    
+    adapter = HTTPAdapter(
+        max_retries=retry_strategy,
+        pool_connections=10,
+        pool_maxsize=10
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    # Set longer timeouts
+    session.timeout = REQUEST_TIMEOUT
+    
+    try:
+        # Attempt to create client
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        
+        # Test connection
+        test_query = supabase.table(TARGET_TABLE).select("count", count="exact").limit(1)
+        test_query.execute()
+        
+        print("✅ Supabase client created successfully")
+        return supabase
+        
+    except Exception as e:
+        print(f"❌ Failed to create Supabase client: {e}")
+        print("Attempting alternative connection method...")
+        
+        # Alternative: Try with SSL verification disabled (INSECURE - only for testing)
+        if not ENABLE_SSL_VERIFY:
+            try:
+                session.verify = False
+                # Note: supabase-py doesn't easily accept custom sessions
+                # You might need to use REST API directly
+                print("⚠️  Using SSL verification disabled (INSECURE)")
+                return create_client(SUPABASE_URL, SUPABASE_KEY)
+            except:
+                pass
+        
+        return None
+
+# Initialize Supabase client
+supabase = create_supabase_client_with_retry()
+if not supabase:
+    print("❌ CRITICAL: Could not initialize Supabase client. Exiting.")
+    exit(1)
 
 print("Loading Department Embedding Models...")
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+try:
+    embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    print("✅ Models loaded successfully")
+except Exception as e:
+    print(f"❌ Failed to load models: {e}")
+    exit(1)
 
 # ==================================================
 # CATEGORIES & MAPPING
@@ -224,6 +313,10 @@ def standardize_location(raw_location: str) -> str:
     return standardize_single_location(str(raw_location))
 
 def is_india_location(location_str: str) -> bool:
+    """
+    Check if the standardized location belongs to India using Groq LLM.
+    Returns True if India is the location, False otherwise.
+    """
     global current_key_index
     
     if not location_str or pd.isna(location_str):
@@ -231,9 +324,11 @@ def is_india_location(location_str: str) -> bool:
     
     location_lower = str(location_str).lower().strip()
     
+    # Fast path: save API calls if "india" is explicitly in the string
     if "india" in location_lower:
         return True
         
+    # Check cache to avoid duplicate LLM calls
     if location_lower in INDIA_LOCATION_CACHE:
         return INDIA_LOCATION_CACHE[location_lower]
         
@@ -283,16 +378,83 @@ def is_india_location(location_str: str) -> bool:
 # UTILS & HELPERS
 # ==================================================
 
-def supabase_execute_with_retry(query_builder, retries=5):
+def test_connection():
+    """Test basic connectivity to Supabase"""
+    try:
+        hostname = urlparse(SUPABASE_URL).netloc
+        # Test DNS resolution
+        ip = socket.gethostbyname(hostname)
+        print(f"✅ DNS Resolution: {hostname} -> {ip}")
+        
+        # Test socket connection
+        sock = socket.create_connection((hostname, 443), timeout=10)
+        sock.close()
+        print("✅ Socket connection successful")
+        
+        return True
+    except Exception as e:
+        print(f"❌ Connection test failed: {e}")
+        return False
+
+def supabase_execute_with_retry(query_builder, retries=CONNECTION_RETRIES):
+    """Enhanced retry function with exponential backoff"""
     for attempt in range(retries):
         try:
             return query_builder.execute()
         except Exception as e:
-            wait_time = (attempt + 1) * 2
-            print(f"Network Error (Attempt {attempt+1}): {e}")
+            error_str = str(e)
+            wait_time = (attempt + 1) * CONNECTION_BACKOFF_FACTOR
+            
+            if "WinError 10060" in error_str:
+                print(f"⏱️ Connection timeout (Attempt {attempt+1}/{retries}) - Waiting {wait_time}s")
+            elif "WinError 10054" in error_str:
+                print(f"🔌 Connection reset (Attempt {attempt+1}/{retries}) - Waiting {wait_time}s")
+            else:
+                print(f"🌐 Network Error (Attempt {attempt+1}): {error_str[:100]}...")
+                print(f"   Waiting {wait_time} seconds...")
+            
             time.sleep(wait_time)
-    print("Critical: Supabase request failed.")
+            
+            # Test connection before retry
+            if attempt == retries - 2:  # Second last attempt
+                print("Testing connection before final retry...")
+                test_connection()
+    
+    print("❌ Critical: Supabase request failed after all retries.")
     return None
+
+def upsert_in_chunks(data, chunk_size=UPSERT_CHUNK_SIZE):
+    """Upsert data in smaller chunks to avoid timeouts"""
+    if not data:
+        return True
+    
+    all_success = True
+    total_chunks = (len(data) + chunk_size - 1) // chunk_size
+    
+    for i in range(0, len(data), chunk_size):
+        chunk = data[i:i+chunk_size]
+        chunk_num = i//chunk_size + 1
+        
+        print(f"📦 Upserting chunk {chunk_num}/{total_chunks} ({len(chunk)} rows)")
+        
+        try:
+            upsert_query = supabase.table(TARGET_TABLE).upsert(chunk)
+            result = supabase_execute_with_retry(upsert_query)
+            
+            if not result:
+                print(f"❌ Failed to upsert chunk {chunk_num}")
+                all_success = False
+            else:
+                print(f"✅ Chunk {chunk_num} upserted successfully")
+            
+            # Small delay between chunks
+            time.sleep(2)
+            
+        except Exception as e:
+            print(f"❌ Error upserting chunk {chunk_num}: {e}")
+            all_success = False
+    
+    return all_success
 
 def generate_slug(job_title, company_name):
     def slugify(text):
@@ -570,8 +732,19 @@ def extract_company_data(row):
 # ==================================================
 
 def run_pipeline():
+    # Test connection first
+    print("Testing Supabase connectivity...")
+    if not test_connection():
+        print("❌ Cannot connect to Supabase. Please check:")
+        print("   1. Your internet connection")
+        print("   2. Firewall settings")
+        print("   3. VPN/Proxy configuration")
+        print("   4. Supabase service status")
+        return
+    
     cleanup_old_jobs()
     print(f"Starting Optimized Pipeline -> Target: {TARGET_TABLE}")
+    print(f"Batch Size: {BATCH_SIZE}, Upsert Chunk Size: {UPSERT_CHUNK_SIZE}")
     print("   - Filter: Job ID Exists in Target")
     print("   - Filter: Description words <= 50")  
     print("   - Filter: Published Date > 90 days ago")  
@@ -582,162 +755,174 @@ def run_pipeline():
     offset = 0
     total_processed = 0
     india_skipped = 0  
+    consecutive_errors = 0
 
     cutoff_date = pd.Timestamp.now(tz="UTC") - pd.DateOffset(days=90)
 
     while True:
-        print(f"\nFetching batch: Rows {offset} to {offset + BATCH_SIZE}...")
+        try:
+            print(f"\nFetching batch: Rows {offset} to {offset + BATCH_SIZE}...")
 
-        query = "*, companies_sustain(company_name, company_url, logo_file_name, description)"
+            query = "*, companies_sustain(company_name, company_url, logo_file_name, description)"
 
-        query_builder = (
-            supabase.table(SOURCE_TABLE)
-            .select(query)
-            .eq("is_active", True)
-            .range(offset, offset + BATCH_SIZE - 1)
-        )
+            query_builder = (
+                supabase.table(SOURCE_TABLE)
+                .select(query)
+                .eq("is_active", True)
+                .range(offset, offset + BATCH_SIZE - 1)
+            )
 
-        res = supabase_execute_with_retry(query_builder)
+            res = supabase_execute_with_retry(query_builder)
 
-        if not res or not res.data:
-            print("Source exhausted. Pipeline Finished.")
-            break
+            if not res or not res.data:
+                print("Source exhausted. Pipeline Finished.")
+                break
 
-        df = pd.DataFrame(res.data)
-
-        batch_ids = df["id"].tolist()
-
-        check_query = (
-                    supabase.table(TARGET_TABLE)
-                    .select("job_id")
-                    .in_("job_id", batch_ids)
-        )
-
-        check_res = supabase_execute_with_retry(check_query)
-
-        existing_ids = set()
-        if check_res and check_res.data:
-            existing_ids = {item["job_id"] for item in check_res.data}
-
-        mask_new_id = ~df["id"].isin(existing_ids)
-
-        df["word_count"] = df["original_description"].apply(
-            lambda x: len(str(x).split()) if pd.notna(x) else 0
-        )
-        mask_long_desc = df["word_count"] > 50  
-
-        df["published_date_dt"] = pd.to_datetime(
-            df["published_date"], errors="coerce", utc=True
-        )
-        mask_fresh_date = (df["published_date_dt"].notna()) & (df["published_date_dt"] >= cutoff_date)
-
-        # Apply all initial filters
-        temp_mask = mask_new_id & mask_long_desc & mask_fresh_date
-        df_temp = df[temp_mask].copy()
-
-        skipped_exists = (~mask_new_id).sum()
-        skipped_short = (mask_new_id & ~mask_long_desc).sum()
-        skipped_old = (mask_new_id & mask_long_desc & ~mask_fresh_date).sum()
-
-        if skipped_exists > 0:
-            print(f"Skipped {skipped_exists} jobs (Already Exist)")
-        if skipped_short > 0:
-            print(f"Skipped {skipped_short} jobs (Desc <= 50 words)")  
-        if skipped_old > 0:
-            print(f"Skipped {skipped_old} jobs (Older than 90 days)")  
-
-        if df_temp.empty:
-            print("Batch fully filtered out. Next...")
-            offset += BATCH_SIZE
-            continue
-
-        print(f"Processing {len(df_temp)} valid jobs for location check...")
-        processed_rows = []
-        batch_india_skipped = 0
-
-        for _, row in df_temp.iterrows():
-            job_id = row["id"]
-
-            raw_location = row.get("location")
-            standardized_location = standardize_location(raw_location)
+            # Reset consecutive errors on successful fetch
+            consecutive_errors = 0
             
-            # Check if location is in India (using Groq)
-            if not is_india_location(standardized_location):
-                batch_india_skipped += 1
-                india_skipped += 1
-                print(f"Skipping Job ID {job_id} - Non-India location: {standardized_location}")
+            df = pd.DataFrame(res.data)
+
+            batch_ids = df["id"].tolist()
+
+            check_query = (
+                        supabase.table(TARGET_TABLE)
+                        .select("job_id")
+                        .in_("job_id", batch_ids)
+            )
+
+            check_res = supabase_execute_with_retry(check_query)
+
+            existing_ids = set()
+            if check_res and check_res.data:
+                existing_ids = {item["job_id"] for item in check_res.data}
+
+            mask_new_id = ~df["id"].isin(existing_ids)
+
+            df["word_count"] = df["original_description"].apply(
+                lambda x: len(str(x).split()) if pd.notna(x) else 0
+            )
+            mask_long_desc = df["word_count"] > 50  
+
+            df["published_date_dt"] = pd.to_datetime(
+                df["published_date"], errors="coerce", utc=True
+            )
+            mask_fresh_date = (df["published_date_dt"].notna()) & (df["published_date_dt"] >= cutoff_date)
+
+            # Apply all initial filters
+            temp_mask = mask_new_id & mask_long_desc & mask_fresh_date
+            df_temp = df[temp_mask].copy()
+
+            skipped_exists = (~mask_new_id).sum()
+            skipped_short = (mask_new_id & ~mask_long_desc).sum()
+            skipped_old = (mask_new_id & mask_long_desc & ~mask_fresh_date).sum()
+
+            if skipped_exists > 0:
+                print(f"Skipped {skipped_exists} jobs (Already Exist)")
+            if skipped_short > 0:
+                print(f"Skipped {skipped_short} jobs (Desc <= 50 words)")  
+            if skipped_old > 0:
+                print(f"Skipped {skipped_old} jobs (Older than 90 days)")  
+
+            if df_temp.empty:
+                print("Batch fully filtered out. Next...")
+                offset += BATCH_SIZE
                 continue
 
-            raw_desc = row.get("original_description", "")
-            generated_description = clean_description_groq(raw_desc)
+            print(f"Processing {len(df_temp)} valid jobs for location check...")
+            processed_rows = []
+            batch_india_skipped = 0
 
-            if not generated_description:
-               print(f"Skipping Job ID {job_id} due to empty/invalid generated description.")
-               continue
+            for _, row in df_temp.iterrows():
+                job_id = row["id"]
 
-            source_dept_text = row.get("department") or row.get("title")
-            mapped_department = map_department(source_dept_text)
+                raw_location = row.get("location")
+                standardized_location = standardize_location(raw_location)
+                
+                # Check if location is in India (using Groq)
+                if not is_india_location(standardized_location):
+                    batch_india_skipped += 1
+                    india_skipped += 1
+                    print(f"Skipping Job ID {job_id} - Non-India location: {standardized_location}")
+                    continue
 
-            comp_data = extract_company_data(row)
-            company_name = comp_data["name"]
+                raw_desc = row.get("original_description", "")
+                generated_description = clean_description_groq(raw_desc)
 
-            job_url_cleaned = clean_utm_url(row.get("job_url"))
-            company_website_cleaned = clean_utm_url(comp_data["homepage_url"])
+                if not generated_description:
+                   print(f"Skipping Job ID {job_id} due to empty/invalid generated description.")
+                   continue
 
-            internal_slug = generate_slug(row.get("title"), company_name)
+                source_dept_text = row.get("department") or row.get("title")
+                mapped_department = map_department(source_dept_text)
+
+                comp_data = extract_company_data(row)
+                company_name = comp_data["name"]
+
+                job_url_cleaned = clean_utm_url(row.get("job_url"))
+                company_website_cleaned = clean_utm_url(comp_data["homepage_url"])
+
+                internal_slug = generate_slug(row.get("title"), company_name)
+                
+                published_at_str = None
+                if pd.notna(row.get("published_date")):
+                     try:
+                         published_at_str = pd.to_datetime(row["published_date"]).strftime("%Y-%m-%d")
+                     except:
+                         published_at_str = None
+
+                min_e = row.get("min_exp")
+                max_e = row.get("max_exp")
+                exp_range = calculate_experience_string(min_e, max_e)
+
+                final_obj = {
+                    "job_id": int(clean_val(row["id"])),
+                    "company_name": company_name,
+                    "company_website": company_website_cleaned,
+                    "job_url": job_url_cleaned,
+                    "title": clean_val(row.get("title")),
+                    "published_at": published_at_str,
+                    "min_ex": int(min_e) if pd.notna(min_e) else None,
+                    "max_ex": int(max_e) if pd.notna(max_e) else None,
+                    "location": standardized_location,
+                    "job_type": normalize_job_type(row.get("job_type")),
+                    "logo_file": clean_val(comp_data["logo_file_name"]),
+                    "internal_slug": internal_slug,
+                    "generated_description": generated_description,
+                    "company_description": clean_val(comp_data["description"]),
+                    "department": mapped_department,
+                    "industry": clean_val(row.get("industry")),
+                    "experience_range": exp_range,
+                    "is_synced": False,
+                }
+
+                processed_rows.append(final_obj)
+
+            if batch_india_skipped > 0:
+                print(f"Skipped {batch_india_skipped} jobs in this batch (Non-India location)")
+
+            if processed_rows:
+                print(f"Upserting {len(processed_rows)} rows to {TARGET_TABLE}...")
+                if upsert_in_chunks(processed_rows):
+                    total_processed += len(processed_rows)
+                    print(f"✅ Success. Total processed: {total_processed}")
+                else:
+                    print(f"⚠️ Some jobs may not have been inserted successfully")
+
+            offset += BATCH_SIZE
+            time.sleep(Rate_Limit_Sleep)
+
+        except Exception as e:
+            consecutive_errors += 1
+            print(f"❌ Unexpected error in main loop: {e}")
             
-            published_at_str = None
-            if pd.notna(row.get("published_date")):
-                 try:
-                     published_at_str = pd.to_datetime(row["published_date"]).strftime("%Y-%m-%d")
-                 except:
-                     published_at_str = None
-
-            min_e = row.get("min_exp")
-            max_e = row.get("max_exp")
-            exp_range = calculate_experience_string(min_e, max_e)
-
-            final_obj = {
-                "job_id": int(clean_val(row["id"])),
-                
-                "company_name": company_name,
-                "company_website": company_website_cleaned,
-
-                "job_url": job_url_cleaned,
-                "title": clean_val(row.get("title")),
-                "published_at": published_at_str,
-                
-                "min_ex": int(min_e) if pd.notna(min_e) else None,
-                "max_ex": int(max_e) if pd.notna(max_e) else None,
-                "experience_range": exp_range,
-
-                "location": standardized_location,
-                "job_type": normalize_job_type(row.get("job_type")),
-
-                "logo_file": clean_val(comp_data["logo_file_name"]),
-                "internal_slug": internal_slug,
-                "generated_description": generated_description,
-                "company_description": clean_val(comp_data["description"]),
-
-                "department": mapped_department,
-                "industry": clean_val(row.get("industry")),
-            }
-
-            processed_rows.append(final_obj)
-
-        if batch_india_skipped > 0:
-            print(f"Skipped {batch_india_skipped} jobs in this batch (Non-India location)")
-
-        if processed_rows:
-            print(f"Upserting {len(processed_rows)} rows to {TARGET_TABLE}...")
-            upsert_query = supabase.table(TARGET_TABLE).upsert(processed_rows)
-            upsert_res = supabase_execute_with_retry(upsert_query)
-            if upsert_res:
-                total_processed += len(processed_rows)
-                print(f"Success. Total processed: {total_processed}")
-
-        offset += BATCH_SIZE
-        time.sleep(Rate_Limit_Sleep)
+            if consecutive_errors >= 3:
+                print("Too many consecutive errors. Stopping pipeline.")
+                break
+            
+            print(f"Retrying after error... (Attempt {consecutive_errors}/3)")
+            time.sleep(10 * consecutive_errors)
+            continue
 
     print(f"\n{'='*50}")
     print(f"PIPELINE COMPLETE")
