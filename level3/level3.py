@@ -25,6 +25,9 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY in environment variables.")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 logging.basicConfig(
@@ -261,13 +264,17 @@ ATS_CONFIG: Dict[str, Dict[str, object]] = {
         "template": "https://app.jobitus.com",
     },
 }
+
+
 def get_companies_from_supabase() -> pd.DataFrame:
     res = supabase.table("companies").select("id,name,homepage_url,careers_url,status").execute()
     return pd.DataFrame(res.data)
 
+
 def get_ats_website_from_supabase() -> pd.DataFrame:
     res = supabase.table("ats_website").select("company_id").execute()
     return pd.DataFrame(res.data)
+
 
 def insert_into_ats_website(company_id: str, ats_name: str, ats_url: str, code_name: str) -> None:
     payload = {
@@ -283,6 +290,7 @@ def insert_into_ats_website(company_id: str, ats_name: str, ats_url: str, code_n
     except Exception as e:
         logger.error("Failed inserting into ats_website: %s", e)
 
+
 def update_company_status(company_id: str, status: str) -> None:
     try:
         supabase.table("companies").update({"status": status}).eq("id", company_id).execute()
@@ -290,11 +298,14 @@ def update_company_status(company_id: str, status: str) -> None:
     except Exception as e:
         logger.error("Failed updating company status (%s): %s", company_id, e)
 
+
 def is_valid_url(value: object) -> bool:
     return isinstance(value, str) and value.startswith("http")
 
+
 def extract_urls_from_html(html: str) -> list[str]:
     return re.findall(r'https?://[^\s"\'<>]+', html)
+
 
 def reconstruct_url(text: str, ats: str) -> Optional[str]:
     cfg = ATS_CONFIG[ats]
@@ -307,6 +318,7 @@ def reconstruct_url(text: str, ats: str) -> Optional[str]:
 
     return cfg["template"].format(match.group(1))
 
+
 def match_ats(text: str) -> Tuple[Optional[str], Optional[str]]:
     lower = text.lower()
     for ats, cfg in ATS_CONFIG.items():
@@ -315,6 +327,7 @@ def match_ats(text: str) -> Tuple[Optional[str], Optional[str]]:
             if clean:
                 return ats, clean
     return None, None
+
 
 def append_to_csv(row: dict) -> None:
     write_header = not os.path.exists(OUTPUT_FILE)
@@ -325,17 +338,20 @@ def append_to_csv(row: dict) -> None:
         header=write_header,
     )
 
+
 def to_snake_case(text: str) -> str:
     text = str(text).strip().lower()
     text = re.sub(r"[^a-z0-9]+", "_", text)
     text = re.sub(r"_+", "_", text)
     return text.strip("_")
 
+
 def is_status_already_set(status: object) -> bool:
     if status is None:
         return False
     s = str(status).strip().lower()
     return s != ""
+
 
 def scrape_page(page: Page, url: str) -> Tuple[str, str, Optional[str]]:
     network_hits: set[str] = set()
@@ -365,6 +381,7 @@ def scrape_page(page: Page, url: str) -> Tuple[str, str, Optional[str]]:
         pass
 
     return url, "Unknown", None
+
 
 def main() -> None:
     logger.info("Starting ATS detection job (skip by status + skip homepage already in ats_website)")
@@ -477,6 +494,7 @@ def main() -> None:
         browser.close()
 
     logger.info("Finished. CSV written to %s", OUTPUT_FILE)
+
 
 if __name__ == "__main__":
     main()
