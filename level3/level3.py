@@ -40,19 +40,20 @@ ATS_CONFIG: Dict[str, Dict[str, object]] = {
         "template": "https://{}.icims.com/jobs/",
     },
     "SuccessFactors": {
-        "domains": ["successfactors.com"],
-        "regex": r"successfactors\.com/([^/]+)",
+        # Handles .com, .eu, and career4/career5/career012 sub-domains
+        "domains": ["successfactors.com", "successfactors.eu", "sapsf.com"],
+        "regex": r"(?:successfactors\.(?:com|eu)|sapsf\.com)/career\?(?:.*&)?company=([^&]+)",
         "template": "https://career5.successfactors.com/career?company={}",
     },
     "Taleo": {
         "domains": ["taleo.net"],
-        "regex": r"taleo\.net/([^/]+)",
+        "regex": r"https?://([^.]+)\.taleo\.net",
         "template": "https://{}.taleo.net/careersection/2/jobsearch.ftl",
     },
     "Freshteam": {
         "domains": ["freshteam.com"],
-        "regex": r"https?://([^.]+)-team\.freshteam\.com",
-        "template": "https://{}-team.freshteam.com/jobs",
+        "regex": r"https?://([^.]+)\.freshteam\.com",
+        "template": "https://{}.freshteam.com/jobs",
     },
     "Recruiterbox": {
         "domains": ["recruiterbox.com"],
@@ -66,7 +67,7 @@ ATS_CONFIG: Dict[str, Dict[str, object]] = {
     },
     "Breezy HR": {
         "domains": ["breezy.hr"],
-        "regex": r"breezy\.hr/([^/]+)",
+        "regex": r"https?://([^.]+)\.breezy\.hr",
         "template": "https://{}.breezy.hr/",
     },
     "FactoHR": {
@@ -81,18 +82,19 @@ ATS_CONFIG: Dict[str, Dict[str, object]] = {
     },
     "RecruitCRM": {
         "domains": ["recruitcrm.io"],
-        "regex": r"recruitcrm\.io/([^/]+)",
-        "template": "https://{}.recruitcrm.io/jobs",
+        "regex": r"recruitcrm\.io/(?:apply/\S+|([^/]+))",
+        "template": "https://recruitcrm.io/{}",
     },
     "Rippling": {
+        # Handles both ats.rippling.com/<company>/jobs and www.rippling.com/careers/<company>
         "domains": ["rippling.com"],
-        "regex": r"rippling\.com/([^/]+)",
-        "template": "https://www.rippling.com/careers/{}",
+        "regex": r"rippling\.com/(?:careers/|)([^/?#]+)",
+        "template": "https://ats.rippling.com/{}/jobs",
     },
     "PyjamaHR": {
         "domains": ["pyjamahr.com"],
-        "regex": r"https?://([^.]+)\.pyjamahr\.com",
-        "template": "https://{}.pyjamahr.com/careers",
+        "regex": r"pyjamahr\.com/careers\?(?:.*&)?company=([^&]+)",
+        "template": "https://app.pyjamahr.com/careers?company={}",
     },
     "ZipRecruiter": {
         "domains": ["ziprecruiter.com"],
@@ -101,13 +103,13 @@ ATS_CONFIG: Dict[str, Dict[str, object]] = {
     },
     "Lever": {
         "domains": ["jobs.lever.co", "lever.co"],
-        "regex": r"lever\.co/([^/]+)",
+        "regex": r"lever\.co/([^/?#]+)",
         "template": "https://jobs.lever.co/{}",
     },
     "Zoho Recruit": {
         "domains": ["zohorecruit.com", "zohorecruit.in", "zohorecruit.eu"],
         "regex": r"https?://([^.]+)\.zohorecruit\.(com|in|eu)",
-        "template": "https://{}.zohorecruit.{}/careers",
+        "template": "https://{}.zohorecruit.{}/jobs/careers",
     },
     "Keka": {
         "domains": ["keka.com"],
@@ -116,12 +118,16 @@ ATS_CONFIG: Dict[str, Dict[str, object]] = {
     },
     "Workable": {
         "domains": ["apply.workable.com"],
-        "regex": r"workable\.com/([^/]+)",
+        "regex": r"workable\.com/([^/?#]+)",
         "template": "https://apply.workable.com/{}/",
     },
     "Workday": {
-        "domains": ["myworkdayjobs.com"],
-        "regex": r"https?://([^.]+)\.myworkdayjobs\.com",
+        # Handles myworkdayjobs.com AND myworkdaysite.com (wd3.myworkdaysite.com/recruiting/<company>/...)
+        "domains": ["myworkdayjobs.com", "myworkdaysite.com"],
+        "regex": (
+            r"https?://(?:([^.]+)\.myworkdayjobs\.com"
+            r"|wd\d+\.myworkdaysite\.com/recruiting/([^/?#]+))"
+        ),
         "template": "https://{}.myworkdayjobs.com/en-US/Careers",
     },
     "Darwinbox": {
@@ -131,7 +137,7 @@ ATS_CONFIG: Dict[str, Dict[str, object]] = {
     },
     "Greenhouse": {
         "domains": ["greenhouse.io", "boards.greenhouse.io"],
-        "regex": r"greenhouse\.io/([^/]+)",
+        "regex": r"greenhouse\.io/([^/?#]+)",
         "template": "https://boards.greenhouse.io/{}",
     },
     "Teamtailor": {
@@ -141,12 +147,12 @@ ATS_CONFIG: Dict[str, Dict[str, object]] = {
     },
     "Jobvite": {
         "domains": ["jobvite.com"],
-        "regex": r"jobvite\.com/([^/]+)",
+        "regex": r"jobvite\.com/([^/?#]+)",
         "template": "https://jobs.jobvite.com/{}/jobs",
     },
     "SmartRecruiters": {
-        "domains": ["smartrecruiters.com"],
-        "regex": r"smartrecruiters\.com/([^/]+)",
+        "domains": ["smartrecruiters.com", "jobs.smartrecruiters.com"],
+        "regex": r"smartrecruiters\.com/([^/?#]+)",
         "template": "https://careers.smartrecruiters.com/{}",
     },
     "BambooHR": {
@@ -154,8 +160,107 @@ ATS_CONFIG: Dict[str, Dict[str, object]] = {
         "regex": r"https?://([^.]+)\.bamboohr\.com",
         "template": "https://{}.bamboohr.com/careers",
     },
-}
 
+    # ── Newly added entries ───────────────────────────────────────────────────
+
+    # Oracle HCM Cloud  (hcfa.fa.us2.oraclecloud.com, fa-emqh-saasfaprod1.fa.ocs.oraclecloud.com …)
+    "Oracle HCM": {
+        "domains": ["oraclecloud.com"],
+        "regex": r"https?://([^.]+)\.fa\.[^.]+\.(?:oraclecloud|ocs\.oraclecloud)\.com",
+        "template": "https://{}.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1",
+    },
+
+    # PeopleStrong  (abgcareers.peoplestrong.com, larsentoubrocareers.peoplestrong.com …)
+    "PeopleStrong": {
+        "domains": ["peoplestrong.com"],
+        "regex": r"https?://([^.]+)\.peoplestrong\.com",
+        "template": "https://{}.peoplestrong.com/job/list",
+    },
+
+    # Recruitee  (hudsonmanpower.recruitee.com …)
+    "Recruitee": {
+        "domains": ["recruitee.com"],
+        "regex": r"https?://([^.]+)\.recruitee\.com",
+        "template": "https://{}.recruitee.com/",
+    },
+
+    # Trakstar Hire  (americanpanels.hire.trakstar.com, lucknowsolar.hire.trakstar.com …)
+    "Trakstar": {
+        "domains": ["hire.trakstar.com"],
+        "regex": r"https?://([^.]+)\.hire\.trakstar\.com",
+        "template": "https://{}.hire.trakstar.com/jobs",
+    },
+
+    # careers-page.com  (careers-page.com/lifelancer/job/…)
+    "CareersPage": {
+        "domains": ["careers-page.com"],
+        "regex": r"careers-page\.com/([^/?#]+)",
+        "template": "https://careers-page.com/{}",
+    },
+
+    # Expertia.ai  (expertia.ai/<company>/job/…)
+    "Expertia": {
+        "domains": ["expertia.ai"],
+        "regex": r"expertia\.ai/([^/?#]+)",
+        "template": "https://expertia.ai/{}",
+    },
+
+    # Recooty  (jobs.recooty.com/<company>/…)
+    "Recooty": {
+        "domains": ["recooty.com"],
+        "regex": r"recooty\.com/([^/?#]+)",
+        "template": "https://jobs.recooty.com/{}",
+    },
+
+    # GoHire  (jobs.gohire.io/<company-slug>/…)
+    "GoHire": {
+        "domains": ["gohire.io"],
+        "regex": r"gohire\.io/([^/?#]+)",
+        "template": "https://jobs.gohire.io/{}",
+    },
+
+    # Rooster.jobs  (rooster.jobs/jobs/…)
+    "Rooster": {
+        "domains": ["rooster.jobs"],
+        "regex": r"rooster\.jobs",
+        "template": "https://rooster.jobs/jobs",
+    },
+
+    # RecruiterFlow  (recruiterflow.com/<company>/jobs/…)
+    "RecruiterFlow": {
+        "domains": ["recruiterflow.com"],
+        "regex": r"recruiterflow\.com/([^/?#]+)",
+        "template": "https://recruiterflow.com/{}/jobs",
+    },
+
+    # UltiPro / UKG  (recruiting.ultipro.com/<company>/…)
+    "UltiPro": {
+        "domains": ["ultipro.com"],
+        "regex": r"ultipro\.com/([^/?#]+)",
+        "template": "https://recruiting.ultipro.com/{}",
+    },
+
+    # ADP Workforce Now  (workforcenow.adp.com/mascsr/…?cid=…)
+    "ADP": {
+        "domains": ["workforcenow.adp.com"],
+        "regex": r"workforcenow\.adp\.com",
+        "template": "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html",
+    },
+
+    # Pandape / Computrabajo  (<company>.pandape.computrabajo.com/…)
+    "Pandape": {
+        "domains": ["pandape.computrabajo.com"],
+        "regex": r"https?://([^.]+)\.pandape\.computrabajo\.com",
+        "template": "https://{}.pandape.computrabajo.com",
+    },
+
+    # Jobitus  (app.jobitus.com/jobseeker/…)
+    "Jobitus": {
+        "domains": ["jobitus.com"],
+        "regex": r"jobitus\.com",
+        "template": "https://app.jobitus.com",
+    },
+}
 def get_companies_from_supabase() -> pd.DataFrame:
     res = supabase.table("companies").select("id,name,homepage_url,careers_url,status").execute()
     return pd.DataFrame(res.data)
