@@ -183,7 +183,9 @@ def run():
                 for i in range(cards.count()):
                     c = cards.nth(i)
                     t = c.locator('[data-automation-id="jobTitle"]')
+                    w = c.locator("//div[@data-automation-id='remoteType']//dd")
                     title = t.inner_text().strip()
+                    work_type = w.inner_text().strip()
 
                     if not is_sustainability_title(title):
                         continue
