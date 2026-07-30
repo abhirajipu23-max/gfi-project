@@ -101,6 +101,40 @@ def posted_to_date(text):
 
     return (today - timedelta(days=int(m.group(1)))).strftime("%Y-%m-%d")
 
+
+def safe_inner_text(locator, timeout=3000, default=""):
+    """
+    Return inner_text() for a locator if a matching element exists, otherwise
+    return `default` immediately.
+
+    Calling .inner_text() directly on a locator that matches zero elements does
+    NOT fail fast - Playwright auto-waits up to the timeout (30s by default)
+    hoping the element appears, then raises TimeoutError. On Workday, many job
+    cards simply don't render fields like remoteType, so that 30s hang/crash
+    happens routinely. This helper checks .count() first and uses a short
+    timeout as a second safety net, so a missing field just becomes "" instead
+    of taking down the whole scrape.
+    """
+    try:
+        if locator.count() == 0:
+            return default
+        text = locator.first.inner_text(timeout=timeout)
+        return text.strip() if text else default
+    except Exception:
+        return default
+
+
+def safe_get_attribute(locator, attr, timeout=3000, default=None):
+    """Same idea as safe_inner_text but for get_attribute()."""
+    try:
+        if locator.count() == 0:
+            return default
+        value = locator.first.get_attribute(attr, timeout=timeout)
+        return value if value else default
+    except Exception:
+        return default
+
+
 def scrape_detail(job):
     try:
         with sync_playwright() as p:
@@ -109,7 +143,7 @@ def scrape_detail(job):
 
             def safe(sel):
                 loc = page.locator(sel)
-                return loc.first.inner_text() if loc.count() else ""
+                return safe_inner_text(loc)
 
             page.goto(job["url"], timeout=60000)
             page.wait_for_selector('[data-automation-id="jobPostingDescription"]', timeout=60000)
@@ -132,6 +166,95 @@ def scrape_detail(job):
         print("Detail failed:", job["url"], e)
         return None
 
+
+def discover_jobs_for_company(page, target, seen, existing_job_urls, jobs):
+    """
+    Runs the search + pagination loop for a single company.
+    Any error here is caught by the caller so one company can't abort the batch.
+    """
+    company = target["company"]
+    base = target["url"]
+    company_sustain_id = target["company_sustain_id"]
+
+    print(f"Scanning: {company}")
+
+    try:
+        page.goto(base, timeout=60000, wait_until="domcontentloaded")
+    except Exception as e:
+        print(f"  -> Failed to load {company}: {e}")
+        return
+
+    try:
+        s = page.get_by_placeholder("Search")
+        s.fill(SEARCH_KEYWORD)
+        s.press("Enter")
+        page.wait_for_timeout(2000)
+    except Exception:
+        pass
+
+    try:
+        page.wait_for_selector('[data-automation-id="jobTitle"]', timeout=10000)
+    except Exception:
+        print(f"  -> No job listings found for {company}")
+        return
+
+    while True:
+        cards = page.locator('//li[.//*[@data-automation-id="jobTitle"]]')
+        card_count = cards.count()
+
+        for i in range(card_count):
+            try:
+                c = cards.nth(i)
+                t = c.locator('[data-automation-id="jobTitle"]')
+                # Leading "." scopes the XPath to this card. Without it, "//div[...]"
+                # is an absolute path and searches the ENTIRE document every time,
+                # not just inside this <li> - which is also what made a missing
+                # remoteType field hang for 30s instead of resolving instantly.
+                w = c.locator(".//div[@data-automation-id='remoteType']//dd")
+
+                title = safe_inner_text(t)
+                if not title:
+                    continue
+
+                # work_type is currently collected but unused downstream; kept for
+                # parity with original code / future use. Missing field -> "".
+                work_type = safe_inner_text(w)  # noqa: F841
+
+                if not is_sustainability_title(title):
+                    continue
+
+                href = safe_get_attribute(t, "href")
+                if not href:
+                    continue
+
+                url = urljoin(base, href)
+
+                if url in seen or url in existing_job_urls:
+                    continue
+
+                seen.add(url)
+
+                jobs.append({
+                    "company": company,
+                    "company_sustain_id": company_sustain_id,
+                    "title": clean(title),
+                    "url": url
+                })
+            except Exception as e:
+                print(f"  -> Skipping a job card on {company} (index {i}) due to error: {e}")
+                continue
+
+        try:
+            nxt = page.locator('button[aria-label="next"]')
+            if nxt.count() == 0:
+                break
+            nxt.click()
+            page.wait_for_timeout(1500)
+        except Exception as e:
+            print(f"  -> Pagination stopped for {company}: {e}")
+            break
+
+
 def run():
     companies_to_scrape = load_target_urls_from_supabase()
     if not companies_to_scrape:
@@ -143,7 +266,6 @@ def run():
     jobs = []
     seen = set()
 
-    # NEW: preload existing Supabase jobs
     existing_job_urls = load_existing_job_urls()
 
     # -------- PHASE 1: Discover Jobs --------
@@ -152,64 +274,13 @@ def run():
         page = browser.new_page()
 
         for target in companies_to_scrape:
-            company = target["company"]
-            base = target["url"]
-            company_sustain_id = target["company_sustain_id"]
-
-            print(f"Scanning: {company}")
-
             try:
-                page.goto(base, timeout=60000,wait_until="domcontentloaded")
-                # page.wait_for_load_state("networkidle")
-            except Exception:
+                discover_jobs_for_company(page, target, seen, existing_job_urls, jobs)
+            except Exception as e:
+                # Final safety net: guarantees one company's unexpected failure
+                # never aborts the remaining companies in the batch.
+                print(f"  -> Aborting scan for {target.get('company', 'Unknown')} due to unexpected error: {e}")
                 continue
-
-            try:
-                s = page.get_by_placeholder("Search")
-                s.fill(SEARCH_KEYWORD)
-                s.press("Enter")
-                page.wait_for_timeout(2000)
-            except Exception:
-                pass
-
-            try:
-                page.wait_for_selector('[data-automation-id="jobTitle"]', timeout=10000)
-            except Exception:
-                continue
-
-            while True:
-                cards = page.locator('//li[.//*[@data-automation-id="jobTitle"]]')
-
-                for i in range(cards.count()):
-                    c = cards.nth(i)
-                    t = c.locator('[data-automation-id="jobTitle"]')
-                    w = c.locator("//div[@data-automation-id='remoteType']//dd")
-                    title = t.inner_text().strip()
-                    work_type = w.inner_text().strip()
-
-                    if not is_sustainability_title(title):
-                        continue
-
-                    url = urljoin(base, t.get_attribute("href"))
-
-                    if url in seen or url in existing_job_urls:
-                        continue
-
-                    seen.add(url)
-
-                    jobs.append({
-                        "company": company,
-                        "company_sustain_id": company_sustain_id,
-                        "title": clean(title),
-                        "url": url
-                    })
-
-                nxt = page.locator('button[aria-label="next"]')
-                if nxt.count() == 0:
-                    break
-
-                nxt.click()
-                page.wait_for_timeout(1500)
 
         browser.close()
 
