@@ -22,8 +22,8 @@ load_dotenv()
 TARGET_TABLE = "jobs_uploadable_wp"
 SOURCE_TABLE = "jobs"
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ufnaxahhlblwpdomlybs.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_1d4J1Ll81KwhYPOS40U8mQ_qtCccNsa")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 GROQ_API_KEYS = [
     os.getenv("API_KEY1"),
@@ -40,7 +40,7 @@ for i, key in enumerate(GROQ_API_KEYS, start=1):
     print(f"API_KEY{i}: {key}")
 
 GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
     "llama-3.1-8b-instant"
 ]
 
