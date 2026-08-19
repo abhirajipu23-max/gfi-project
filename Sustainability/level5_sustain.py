@@ -61,7 +61,7 @@ for i, key in enumerate(GROQ_API_KEYS, start=1):
     print(f"API_KEY{i}: {key[-6:]}")  # Only show last 6 chars for security
 
 GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
     "llama-3.1-8b-instant"
 ]
 
