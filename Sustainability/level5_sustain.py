@@ -62,7 +62,7 @@ for i, key in enumerate(GROQ_API_KEYS, start=1):
 
 GROQ_MODELS = [
     "openai/gpt-oss-120b",
-    "llama-3.1-8b-instant"
+    "qwen/qwen3.6-27b"
 ]
 
 current_key_index = 0
