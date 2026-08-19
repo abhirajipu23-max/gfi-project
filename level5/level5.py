@@ -224,7 +224,7 @@ def standardize_single_location(raw_location: str) -> str:
         
         location_client = Groq(api_key=active_key)
         response = location_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": LOCATION_PROMPT_TEMPLATE.format(location=cleaned_loc)}],
             temperature=0,
             max_tokens=50,
